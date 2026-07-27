@@ -1,0 +1,80 @@
+// Build-fixer pipeline for the course Jenkins (cstu-jenkins) — full "open a real PR" flow.
+//
+// Clones the private CSE636 repo, runs the buggy tests inside project/build-fixer/,
+// and on a red build the agent opens a no-merge PR with the proposed fix. A human
+// reviews/merges the PR on GitHub, then clicks Proceed at the approval gate.
+//
+// Credentials required (Manage Jenkins -> Credentials -> System -> Global):
+//   - ANTHROPIC_API_KEY  (Secret text)         the Anthropic API key
+//   - github-token       (Secret text)         a PAT with `repo` scope (agent opens the PR)
+//   - github-https       (Username with password) GitHub user + PAT (private-repo checkout)
+
+pipeline {
+  agent any                    // single-container cstu-jenkins.
+                               // For the Week 2 master/agent topology use: agent { label 'python-agent' }
+
+  environment {
+    ANTHROPIC_API_KEY = credentials('ANTHROPIC_API_KEY')   // "Secret text" credential
+    GH_TOKEN          = credentials('github-token')         // "Secret text": PAT with repo scope
+    REPO              = 'qingsong-cstu/CSE636'              // the agent opens the PR here
+    BASE_BRANCH       = 'main'
+    GITHUB_RUN_ID     = "${BUILD_NUMBER}"                    // unique bot/fix-build-<n> branch per run
+    MODEL             = 'claude-haiku-4-5'                   // cheaper run; omit for the default claude-opus-4-8
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        git branch: 'main',
+            url: 'https://github.com/qingsong-cstu/CSE636.git',
+            credentialsId: 'github-https'                   // Username/password credential (private repo)
+      }
+    }
+
+    stage('Test (expect red)') {
+      steps {
+        dir('project/build-fixer') {                        // the starter lives in this subfolder
+          script {
+            // returnStatus lets the red build continue so the agent stage can run.
+            // Redirect (don't pipe): `pytest … | tee` reports tee's exit code (always 0)
+            // and would hide the failure, so the gated stages would be skipped.
+            def rc = sh(script: 'pytest tests/test_calculator.py --tb=short > build_log.txt 2>&1',
+                        returnStatus: true)
+            sh 'cat build_log.txt'                          // still show the log in the console
+            env.TESTS_FAILED = (rc != 0) ? 'true' : 'false'
+          }
+          echo "Tests failed? ${env.TESTS_FAILED}"
+        }
+      }
+    }
+
+    stage('Agent: open PR') {
+      when { expression { env.TESTS_FAILED == 'true' } }
+      steps {
+        // No dir() here: run from the repo root and pass the FULL paths so the PR
+        // targets the right file inside the monorepo (project/build-fixer/src/...).
+        // Inside dir('project/build-fixer') the agent would report the path as
+        // src/calculator.py, which doesn't exist at the CSE636 repo root.
+        sh 'pip install --quiet PyGithub'                   // anthropic is baked into the image; PyGithub is not
+        sh '''python project/build-fixer/scripts/build_fixer_agent.py --open-pr \
+                --log    project/build-fixer/build_log.txt \
+                --source project/build-fixer/src/calculator.py'''
+      }
+    }
+
+    stage('Human approval gate') {
+      when { expression { env.TESTS_FAILED == 'true' } }
+      steps {
+        // input pauses until a person clicks Proceed; the timeout ABORTS, never auto-approves.
+        timeout(time: 60, unit: 'MINUTES') {
+          input message: 'Agent opened a PR. Review & merge it on GitHub, then Proceed to confirm — or Abort.'
+        }
+      }
+    }
+  }
+
+  post {
+    // build_log.txt is written inside the subfolder, so archive that path
+    always { archiveArtifacts artifacts: 'project/build-fixer/build_log.txt', allowEmptyArchive: true }
+  }
+}

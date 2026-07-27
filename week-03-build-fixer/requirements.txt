@@ -1,0 +1,5 @@
+# Pure core (logparse) + app (calculator) tests need only pytest.
+pytest>=8.0
+# The agent driver (scripts/build_fixer_agent.py) needs these:
+anthropic>=0.69
+PyGithub>=2.5
