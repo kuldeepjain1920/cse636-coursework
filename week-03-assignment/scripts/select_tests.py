@@ -19,7 +19,8 @@ def get_changed_files():
     """Return changed .py files under src/, comparing HEAD~1..HEAD.
     Falls back to 'everything' on the first commit (no parent to diff against)."""
     diff = subprocess.run(
-        ["git", "diff", "--name-only", "HEAD~1", "HEAD"],
+        ##["git", "diff", "--name-only", "HEAD~1", "HEAD"],
+        ["git", "diff", "--name-only", "--relative", "HEAD~1", "HEAD"],
         capture_output=True, text=True
     )
     if diff.returncode != 0:
