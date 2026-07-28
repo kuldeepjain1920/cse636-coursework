@@ -1,0 +1,38 @@
+name: CI with Test-Impact Analysis
+
+on:
+  push:
+    branches: ["*"]
+  pull_request:
+
+jobs:
+  select-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: week-03-assignment
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # need HEAD~1 to exist for the diff -- shallow clones default to depth 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install pytest
+
+      - name: Select relevant tests
+        id: select
+        run: |
+          SELECTED=$(python3 scripts/select_tests.py)
+          echo "Selected tests: $SELECTED"
+          echo "selected=$SELECTED" >> "$GITHUB_OUTPUT"
+
+      - name: Run only the selected tests
+        if: steps.select.outputs.selected != ''
+        run: pytest -v ${{ steps.select.outputs.selected }}
+
+      - name: No relevant tests to run
+        if: steps.select.outputs.selected == ''
+        run: echo "No src/ changes detected -- skipping test run entirely."
