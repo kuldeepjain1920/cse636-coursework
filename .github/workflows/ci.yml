@@ -70,4 +70,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           REPO: ${{ github.repository }}
           BASE_BRANCH: main
-        run: python3 scripts/remediation_agent.py --log build_log.txt --open-pr --requirements week-03-assignment/requirements.txt
+        run: python3 scripts/remediation_agent.py --log build_log.txt --open-pr --requirements week-03-assignment/requirements-app.txt
