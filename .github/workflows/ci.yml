@@ -1,4 +1,4 @@
-name: CI with Test-Impact Analysis
+name: CI with Test-Impact Analysis and Auto-Remediation
 
 on:
   push:
@@ -8,19 +8,21 @@ on:
 jobs:
   select-and-test:
     runs-on: ubuntu-latest
+    outputs:
+      build_failed: ${{ steps.runtests.outputs.failed }}
     defaults:
       run:
         working-directory: week-03-assignment
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2  # need HEAD~1 to exist for the diff -- shallow clones default to depth 1
+          fetch-depth: 2
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - run: pip install pytest
+      - run: pip install -r requirements.txt
 
       - name: Select relevant tests
         id: select
@@ -29,10 +31,43 @@ jobs:
           echo "Selected tests: $SELECTED"
           echo "selected=$SELECTED" >> "$GITHUB_OUTPUT"
 
-      - name: Run only the selected tests
+      - name: Run selected tests (capture log, don't fail the job yet)
+        id: runtests
         if: steps.select.outputs.selected != ''
-        run: pytest -v ${{ steps.select.outputs.selected }}
+        run: |
+          set +e
+          pytest -v ${{ steps.select.outputs.selected }} 2>&1 | tee build_log.txt
+          rc=${PIPESTATUS[0]}
+          echo "failed=$([ $rc -ne 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
-      - name: No relevant tests to run
-        if: steps.select.outputs.selected == ''
-        run: echo "No src/ changes detected -- skipping test run entirely."
+      - uses: actions/upload-artifact@v4
+        if: steps.select.outputs.selected != ''
+        with:
+          name: build-log
+          path: week-03-assignment/build_log.txt
+
+  remediate:
+    needs: select-and-test
+    if: needs.select-and-test.outputs.build_failed == 'true'
+    runs-on: ubuntu-latest
+    environment: agent-proposed
+    defaults:
+      run:
+        working-directory: week-03-assignment
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-log
+          path: week-03-assignment
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install anthropic PyGithub
+      - name: Run remediation agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: ${{ github.repository }}
+          BASE_BRANCH: main
+        run: python3 scripts/remediation_agent.py --log build_log.txt --open-pr --requirements week-03-assignment/requirements.txt
