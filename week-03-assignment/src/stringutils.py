@@ -3,3 +3,4 @@ def reverse(s):
 
 def is_palindrome(s):
     return s == s[::-1]
+# trivial comment to simulate a real change
