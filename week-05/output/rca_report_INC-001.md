@@ -5,7 +5,7 @@
 ## Evidence
 - CPU peaked at 43.62% during the incident window
 - p99 latency peaked at 195.6ms
-- 0 log lines matched the incident window
+- 1 log lines matched the incident window
 
 ## Preventive measures
 - Add autoscaling trigger on sustained CPU > 75%

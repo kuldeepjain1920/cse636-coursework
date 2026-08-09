@@ -22,6 +22,25 @@ plus `spans_sample.json` with the captured OTel spans.
 
 ## Key decisions
 
+### Why precision/recall, not accuracy
+
+This dataset is ~98% normal (484 of 500 points). A detector that predicts
+"normal" for everything scores ~98% accuracy while catching zero real
+anomalies (recall = 0) — useless. That's why the evaluation reports
+precision and recall for the Anomaly class specifically, and why tuning
+`contamination` is really tuning that precision↔recall trade-off:
+
+- Lower `contamination` → fewer flags → higher precision, lower recall
+  (confirmed at 0.01: precision=1.00, recall=0.25 — missed 12 of 16
+  real anomalies).
+- Higher `contamination` → more flags → higher recall, lower precision
+  (confirmed at 0.10: precision=0.32, recall=1.00 — 34 false alarms).
+
+The right balance depends on the cost of a miss vs. a false alarm for
+the service being monitored — contamination=0.04 was chosen here
+because it's closest to this dataset's true anomaly rate (16/500 ≈
+0.032), landing near the best F1 (0.89) with perfect recall.
+
 - **contamination=0.04 for IsolationForest** — tuned in the Lab by
   sweeping 0.01/0.04/0.10. 0.04 is closest to the true anomaly rate in
   this dataset (16/500 ≈ 0.032) and gave the best F1 (0.89), with

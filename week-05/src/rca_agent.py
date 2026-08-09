@@ -100,10 +100,12 @@ if __name__ == "__main__":
     incidents = group_alerts(result)
 
     # Placeholder — replace with your own real logs_sample.txt content.
-    log_lines = [
-        f"{ts.strftime('%Y-%m-%d %H:%M')} ERROR db connection pool exhausted"
-        for ts in pd.date_range("2025-10-01 11:20", periods=16, freq="1min")
-    ]
+    ##log_lines = [
+    ##    f"{ts.strftime('%Y-%m-%d %H:%M')} ERROR db connection pool exhausted"
+    ##    for ts in pd.date_range("2025-10-01 11:20", periods=16, freq="1min")
+    ##]
+    with open("../data/logs_sample.txt") as f:
+        log_lines = f.read().splitlines()
 
     for incident in incidents:
         with traced_tool_call(tracer, tool_name="get_metrics_window", args={"incident_id": incident.incident_id}):
