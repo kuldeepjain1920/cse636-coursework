@@ -1,0 +1,8 @@
+# Additional scrape config for Prometheus, telling it to also scrape
+# our locally-running emit_metric.py script via Docker Desktop's special
+# host.docker.internal DNS name (resolves to the Mac itself from inside
+# any pod in the cluster)
+extraScrapeConfigs: |
+  - job_name: 'forecast-metric'
+    static_configs:
+      - targets: ['host.docker.internal:8000']

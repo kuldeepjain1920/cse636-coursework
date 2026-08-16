@@ -1,0 +1,22 @@
+# Tells KEDA: watch the predicted_cpu_next_30m metric in Prometheus, and
+# scale forecast-demo-app based on it, instead of (or alongside) standard
+# CPU-based HPA.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: forecast-scaledobject
+spec:
+  scaleTargetRef:
+    name: forecast-demo-app
+  minReplicaCount: 2
+  maxReplicaCount: 10
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-server.monitoring.svc.cluster.local
+        metricName: predicted_cpu_next_30m
+        # threshold is PER-REPLICA target, same idea as target_cpu_pct=60
+        # in recommend_replicas() -- KEDA divides the metric value by this
+        # to decide how many replicas are needed
+        threshold: "60"
+        query: predicted_cpu_next_30m{service="my-app"}
