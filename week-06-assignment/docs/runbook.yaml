@@ -1,0 +1,34 @@
+# Structured runbook for the order-svc CPU-saturation failure mode,
+# based on Week 5's real INC-002 incident.
+failure_mode: order-svc-cpu-saturation
+source_incident: INC-002              # produced by Week 5's alert_grouper.py
+trigger:
+  metric: cpu_utilization_pct
+  threshold: 85                       # INC-002 peaked at 91.56% -- comfortably above this
+  duration: 10m                       # INC-002's window was 15 minutes (11:20-11:35)
+diagnostics:
+  - tool: get_cpu_metrics
+  - tool: get_replica_count
+  - tool: get_recent_logs
+decision_logic:
+  auto_remediate_if:
+    - cpu_utilization_pct > 85
+    - current_replicas < max_replicas          # nothing to gain from scaling if already maxed
+    - error_budget_remaining > 0.10             # blast-radius control: error-budget gate
+    - minutes_since_last_scale_action > 10      # blast-radius control: rate limit
+    - autonomy_kill_switch == "on"              # blast-radius control: kill switch
+  escalate_if:
+    - current_replicas >= max_replicas          # scaling alone can't fix it -- needs a human
+    - error_budget_remaining <= 0.10
+    - autonomy_kill_switch == "off"
+    - confidence < 0.7
+remediation:
+  action: scale_out
+  target_replica_calculation: "ceil(current_replicas * peak_cpu_pct / target_cpu_pct)"
+  target_cpu_pct: 60                  # same target used in Week 4's KEDA ScaledObject
+  autonomy_level: 2                   # draft & confirm -- human approves before execute_scale
+  requires_approval: true
+verification:
+  - re-check get_cpu_metrics 60s after scaling completes
+  - confirm cpu_utilization_pct back under 70% before closing the incident
+  - if still elevated after verification window, escalate rather than scale again automatically
