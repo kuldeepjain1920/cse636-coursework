@@ -8,3 +8,6 @@ __pycache__/
 venv-week6/
 .env
 gcp-sa-key.json
+tfplan.binary
+tfplan.json
+.terraform/
