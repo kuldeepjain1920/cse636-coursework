@@ -21,7 +21,7 @@
         {
           "uri": "git+https://github.com/kuldeepjain1920/cse636-coursework@capstone-option-c",
           "digest": {
-            "gitCommit": "879604e3ba7c2f7e5de5dec7b62294907314dc71"
+            "gitCommit": "b370081ff3696121c3a0503e7ed8d7309a58de4d"
           }
         }
       ]
@@ -30,12 +30,16 @@
       "builder": {
         "id": "https://claude.ai/code",
         "version": {
-          "claude-code": "2.1.197"
+          "claude-code": "2.1.234"
         }
       },
       "metadata": {
         "startedOn":  "2026-08-17T22:55:47Z",
-        "finishedOn": "2026-08-17T22:55:47Z"
+        "finishedOn": "2026-08-17T23:20:46Z",
+        "invocationId": "manual-post-hoc-generation",
+        "annotations": {
+            "note": "Timestamps and claude-code version reflect provenance drafting time (same calendar day as gcs.tf generation and GCP project creation), reconstructed retroactively from session history rather than captured live during the actual terraform plan execution." 
+        }
       },
       "byproducts": [
         {
