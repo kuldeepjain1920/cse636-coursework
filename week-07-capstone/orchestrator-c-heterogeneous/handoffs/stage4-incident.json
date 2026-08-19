@@ -1,0 +1,23 @@
+{
+  "incident_id": "INC-002",
+  "service": "order-svc",
+  "detected_at": "2025-10-01T11:20:00Z",
+  "peak_metrics": {
+    "cpu_utilization_pct": 91.56,
+    "error_rate": 0.149,
+    "p99_latency_ms": 3661.8,
+    "error_budget_remaining": 0.34,
+    "current_replicas": 4,
+    "max_replicas": 10,
+    "target_cpu_pct": 60
+  },
+  "rca_summary": {
+    "probable_cause": "CPU saturation likely driving latency degradation",
+    "evidence": [
+      "CPU peaked at 91.56% during the incident window",
+      "p99 latency peaked at 3661.8ms",
+      "16 log lines matched the incident window"
+    ],
+    "confidence": "high"
+  }
+}
