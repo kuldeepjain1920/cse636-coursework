@@ -11,3 +11,4 @@ gcp-sa-key.json
 tfplan.binary
 tfplan.json
 .terraform/
+venv-*/
