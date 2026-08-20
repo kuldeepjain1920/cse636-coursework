@@ -13,6 +13,14 @@ import hashlib
 import psutil
 from flask import Flask, jsonify
 
+_process = psutil.Process()
+_process.cpu_percent()
+
+# Note: cpu_pct can exceed 100% -- Process.cpu_percent() reports the
+# percentage of ONE core's worth of time; concurrent/multi-core work
+# (e.g. hashlib releasing the GIL during hashing) can genuinely consume
+# more than one core's worth simultaneously. This is expected, not a bug.
+
 app = Flask(__name__)
 
 CPU_ERROR_THRESHOLD = 75.0  # % -- above this, /order starts failing probabilistically
@@ -42,7 +50,7 @@ def order():
     order_id = _request_count  # snapshot immediately -- fixes the race condition
     start = time.perf_counter()
 
-    cpu_pct = psutil.cpu_percent(interval=0.1)
+    cpu_pct = _process.cpu_percent(interval=0.1)
     _peak_cpu_pct = max(_peak_cpu_pct, cpu_pct)  # track peak, not just instantaneous
 
     # Error rate rises as a real consequence of CPU pressure, not a fixed
@@ -72,7 +80,7 @@ def order():
 @app.route("/metrics")
 def metrics():
     return jsonify({
-        "cpu_pct": psutil.cpu_percent(interval=0.1),
+        "cpu_pct": _process.cpu_percent(interval=0.1),
         "peak_cpu_pct": _peak_cpu_pct,
         "total_requests": _request_count,
         "total_errors": _error_count,

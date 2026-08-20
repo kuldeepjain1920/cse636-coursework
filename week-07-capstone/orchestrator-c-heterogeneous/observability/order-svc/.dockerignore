@@ -1,0 +1,3 @@
+venv-order-svc/
+__pycache__/
+*.pyc
