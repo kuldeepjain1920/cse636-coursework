@@ -1,12 +1,14 @@
 # CSE636 Capstone — Continuation / Handoff Document
 
-**Purpose:** paste this entire document into a new Claude chat to resume work
-on this capstone with full context, without needing the original
+**Purpose:** paste this entire document into a new Claude chat to resume
+work on this capstone with full context, without needing the original
 (very long) conversation history. Keep this updated at the end of each
 work session.
 
-**Last updated:** end of Stage 4 Step 4 (load generator), before starting
-the production-shaped Step 5 rebuild.
+**Last updated:** after completing documents 1-5 of the planned 7-doc
+set (decisions log, continuation doc, architecture, runbook, per-stage
+READMEs). Documents 6 (capstone report) and 7 (demo script) deliberately
+deferred — see §5 and §9.
 
 ---
 
@@ -16,12 +18,9 @@ the production-shaped Step 5 rebuild.
 - **Repo:** `github.com/kuldeepjain1920/cse636-coursework`
 - **Active branch:** `capstone-option-c`
 - **This document covers:** the `week-07-capstone/` folder only (Weeks 0-6
-  are complete and closed out separately — see `/areas/cse636-devops-for-ai.md`
-  memory notes for that history if needed, not relevant to continuing this
-  specific work)
+  are complete and closed out separately)
 - **Grading weight:** Capstone Project = 20% (tied with Final Exam as the
-  largest single component — NOT a bonus, this was previously misjudged
-  and corrected)
+  largest single component — NOT a bonus)
 - **Deadline posture:** not time-constrained; will submit whatever is
   ready by the weekend
 
@@ -68,7 +67,10 @@ cse636-coursework/                          [repo root, branch: capstone-option-
 ├── week-00 through week-06.../             [complete, closed out, not relevant here]
 └── week-07-capstone/
     ├── docs/
-    │   └── decisions.md                    [DONE — chronological decisions log]
+    │   ├── decisions.md                    [DONE]
+    │   ├── CONTINUATION.md                 [DONE — this file]
+    │   ├── architecture.md                 [DONE]
+    │   └── RUNBOOK.md                      [DONE — Sections 0-4 + 6; Section 5 is a placeholder]
     └── orchestrator-c-heterogeneous/
         ├── handoffs/
         │   ├── stage4-incident.json        [hand-written fixture, used to test Stage 5]
@@ -82,6 +84,7 @@ cse636-coursework/                          [repo root, branch: capstone-option-
         │   └── gcp-sa-key.json             [gitignored]
         ├── remediation/                    [DONE — Stage 5]
         │   ├── remediation_agent.py
+        │   ├── README.md                   [DONE]
         │   └── itsm_tickets/
         │       ├── TICKET-4bcc5234.json    [remediated outcome]
         │       ├── TICKET-f80d6a13.json    [escalated_declined outcome]
@@ -89,6 +92,7 @@ cse636-coursework/                          [repo root, branch: capstone-option-
         └── observability/                  [IN PROGRESS — Stage 4]
             ├── load_generator.py           [DONE — Step 4]
             ├── requirements.txt             [DONE — just `requests`]
+            ├── README.md                    [DONE]
             └── order-svc/                  [DONE — Steps 1-3]
                 ├── app.py
                 ├── requirements.txt         [flask, psutil, opentelemetry-sdk, opentelemetry-api]
@@ -107,22 +111,22 @@ cse636-coursework/                          [repo root, branch: capstone-option-
 | Stage 2 (IaC lab) | ✅ Done, fully verified incl. SLSA + real bugs found | `1c7e2b2`, `c4580c3` |
 | Stage 5 (auto-remediation) | ✅ Done, 3 outcome paths verified | `3f5364b`, `baac52c`, `be3f793` |
 | Stage 4 Steps 1-4 (service, container, OTel, load gen) | ✅ Done | `1583769`, `b09ed39`, `369b86c`, `cac93c9` |
-| **Stage 4 Step 5-6 (production-shaped bridge + chain)** | ⬜ **NOT STARTED — this is the current task** | — |
+| **Stage 4 Step 5-6 (production-shaped bridge + chain)** | ⬜ **NOT STARTED — this is the current build task** | — |
 | Stage 3 (predictive deploy) | ⬜ Not started | — |
 | Wiring all 5 stages end-to-end | ⬜ Not started | — |
 | Option B (GitHub Actions) | ⬜ Not started | — |
 | Option A (single script) | ⬜ Not started | — |
-| `docs/decisions.md` | ✅ Done | `be01265` |
-| `docs/architecture.md` | ⬜ Not started (doc #3 in queue) | — |
-| `docs/RUNBOOK.md` | ⬜ Not started (doc #4 in queue) | — |
-| Per-stage READMEs (remaining: observability/, remediation/) | ⬜ Not started (doc #5 in queue) | — |
-| Capstone report (4-6pp) | ⬜ Not started (doc #6 in queue) | — |
-| 15-min demo script | ⬜ Not started (doc #7 in queue) | — |
+| `docs/decisions.md` (doc 1) | ✅ Done | `be01265` |
+| `docs/CONTINUATION.md` (doc 2) | ✅ Done, kept updated | `22fdcb4` (original), this revision pending |
+| `docs/architecture.md` (doc 3) | ✅ Done | `057d023` |
+| `docs/RUNBOOK.md` (doc 4) | ✅ Done for what's built; §5 placeholder pending production-shaped work | `12026e9` |
+| Per-stage READMEs — `observability/`, `remediation/` (doc 5) | ✅ Done | `1e19da2` |
+| Capstone report (doc 6, 4-6pp) | ⬜ **Deliberately deferred** — see §9 | — |
+| 15-min demo script (doc 7) | ⬜ **Deliberately deferred** — see §9 | — |
 
-**Rough overall completion: ~30% of the full capstone.** This is a
-directional estimate, not precise — every stage built so far has taken
-longer than originally planned due to real, unpredictable debugging
-(see `decisions.md` D16-D18 for examples).
+**Rough overall completion: ~30-35% of the full capstone.** Directional
+estimate, not precise — every stage built so far has taken longer than
+originally planned due to real, unpredictable debugging.
 
 ---
 
@@ -150,7 +154,8 @@ reasoning.
   manual `curl` checks still use it).
 - **Add** a second endpoint (or convert `/metrics` to serve both) using
   the `prometheus_client` Python library: `order_svc_cpu_percent` (Gauge),
-  `order_svc_requests_total{status}` (Counter), `order_svc_request_duration_seconds` (Histogram).
+  `order_svc_requests_total{status}` (Counter),
+  `order_svc_request_duration_seconds` (Histogram).
 
 **Phase 3 — Point the existing Prometheus at it**
 - Add a scrape target for `order-svc` to Prometheus's config — same
@@ -192,6 +197,9 @@ already-rejected plan. Given no time constraint and that this reuses
 Week 4's proven Prometheus/KEDA infrastructure, the extra time was judged
 worthwhile.
 
+**When each phase completes, append its commands to `docs/RUNBOOK.md`
+§5 (currently a placeholder).**
+
 ---
 
 ## 7. Working conventions established this session (follow these)
@@ -220,8 +228,10 @@ worthwhile.
   files outside the image (e.g., `load_generator.py`).
 - **Documentation discipline:** per-stage READMEs written immediately
   after each stage is verified (see `iac/README.md` as the template).
-  `docs/decisions.md` updated continuously at each real decision point —
-  do not defer big documentation to "the end."
+  `docs/decisions.md` updated continuously at each real decision point.
+  Big synthesis documents (the report, the demo script) are deliberately
+  deferred until the underlying build is far enough along that they
+  won't need a substantial rewrite — see §9.
 
 ---
 
@@ -250,10 +260,18 @@ worthwhile.
 
 - **PR from `capstone-option-c` to `main`:** not yet opened. Still
   undecided whether to open it now or after more of Option C lands.
-- **Rubric-mapping table:** agreed to include in this document but not
-  yet built — should map each capstone rubric line item (from the
-  original Week 7 course doc) to the specific artifact/README/section
-  that satisfies it. **TODO when resuming.**
+- **Documents 6 and 7 (capstone report, demo script): deliberately
+  deferred**, not forgotten. Reasoning: both documents summarize the
+  *whole* capstone, and as of this writing Stage 3, full 5-stage wiring,
+  Stage 4's production-shaped upgrade, and Options B/A are all still
+  unbuilt (~65-70% of the project). Writing these now risks the same
+  problem `architecture.md` already hit once mid-session (a real design
+  pivot that would have required a rewrite) — better to write them once,
+  accurately, once the build is far enough along. **Resume these once
+  Stage 3, full wiring, and at minimum Option B exist.**
+- **Rubric-mapping table:** this was completed — it lives in
+  `docs/architecture.md` §6. (Earlier versions of this document listed it
+  as still-pending; that's now resolved.)
 
 ---
 
@@ -262,7 +280,8 @@ worthwhile.
 1. Confirm environment: `gcloud config list` (expect `cse636-capstone-iac`),
    `git status` / `git branch` (expect `capstone-option-c`, clean tree).
 2. Read this document fully before taking any action.
-3. Continue with Section 6 (Stage 4 production-shaped Step 5-6, Phase 1
-   onward) unless told otherwise.
-4. Update Section 5 (status table) and this document's "Last updated"
-   line at the end of the session.
+3. Continue with §6 (Stage 4 production-shaped Step 5-6, Phase 1 onward)
+   unless told otherwise.
+4. Update §5 (status table) and this document's "Last updated" line at
+   the end of the session. If new documents get committed, update §4
+   (repo structure) too.
