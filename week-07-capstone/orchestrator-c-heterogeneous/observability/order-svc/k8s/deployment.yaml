@@ -3,6 +3,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: order-svc
+  namespace: orders
   labels:
     app: order-svc
 spec:
@@ -28,6 +29,11 @@ apiVersion: v1
 kind: Service
 metadata:
   name: order-svc
+  namespace: orders
+  annotations:
+    prometheus.io/scrape: "true"       # tells Prometheus's job to pick this Service up
+    prometheus.io/path: "/metrics/prometheus"  # our new endpoint, not the old JSON one
+    prometheus.io/port: "8080"
 spec:
   selector:
     app: order-svc
