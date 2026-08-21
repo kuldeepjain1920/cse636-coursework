@@ -253,6 +253,14 @@ worthwhile.
   lab (an unprompted `terraform apply` attempt; a correctly-refused
   prompt-injection sequence) — see `iac/README.md` for full detail. These
   are real evidence for the "Agent security and guardrails" rubric line.
+- IsolationForest (contamination=0.04) reliably flags brief, isolated
+  anomalies but was observed to MISS a genuine 5-point cluster of
+  identical extreme values (error_rate=1.0, latency_p99_ms=2387.5) in real
+  Prometheus data -- a direct consequence of rate()'s 5-minute smoothing
+  duplicating the same reading across consecutive query points, combined
+  with the model's low contamination setting not expecting a cluster that
+  size. Documented in full in `decisions.md` D23. Not fixed -- flagged as
+  a real, honest limitation rather than tuned away.
 
 ---
 

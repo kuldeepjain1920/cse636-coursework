@@ -386,6 +386,79 @@ so no single document depends on reconstructing reasoning after the fact.
 
 ---
 
+### D22 — anomaly_detector.py -> Prometheus: local dev via port-forward, containerize for Phase 6
+
+**Decision:** Phase 4's anomaly_detector.py reaches Prometheus's query_range
+API via `kubectl port-forward svc/prometheus-server 9090:80` while
+developing/debugging the PromQL logic locally. This is explicitly NOT
+production-realistic -- port-forward is a manual developer tunnel, not
+something a real deployment relies on.
+
+**Why not fix this now:** the actual goal of Phase 4 is validating the
+PromQL queries and fit_detector() behavior on real data -- fast local
+iteration (edit script, rerun, see result in seconds) matters more right
+now than in-cluster realism.
+
+**Plan to close the gap:** once anomaly_detector.py's logic is confirmed
+working, it will be containerized (Dockerfile similar to order-svc's) and
+run as a Kubernetes Job for Phase 6's "chain into Stage 5" step -- at that
+point PROMETHEUS_URL changes from http://localhost:9090 to Prometheus's
+in-cluster DNS name (http://prometheus-server.monitoring.svc.cluster.local),
+and no tunnel is needed since the Job runs on the correct side of the
+network boundary. Phase 6 needs anomaly_detector.py running as an
+automated pipeline stage anyway, so this isn't wasted work -- just
+correctly sequenced later rather than now.
+
+**Rejected alternative:** containerizing immediately, before validating
+the query logic. Rejected because every iteration on the PromQL
+expressions would require a full rebuild+redeploy cycle, far slower than
+local iteration for something still being debugged.
+
+---
+
+## D23 — IsolationForest under-detects sustained/repeated incidents at low contamination
+
+**Finding:** Real-data testing produced a genuinely surprising result. The
+same anomalous reading (error_rate=1.0, latency_p99_ms=2387.5, from a real
+load_generator.py spike) appeared in two separate test runs:
+- Run 1: appeared as a single isolated point (1 of 46) -- correctly flagged
+  as an anomaly.
+- Run 2: the same value appeared 5 consecutive times (5 of 61, ~8.2% of the
+  window) due to rate()'s 5-minute trailing-average smoothing -- NONE of
+  the 5 points were flagged, despite being the same extreme values.
+
+**Root cause:** IsolationForest isolates points by how easy they are to
+separate from their neighbors via random splits. A single extreme point is
+trivially easy to isolate. Five points at an identical extreme value form a
+small cluster, which is inherently harder to separate -- even though every
+value in that cluster is genuinely anomalous. This is compounded by
+contamination=0.04 (~4%) being lower than the actual anomalous fraction in
+this window (~8.2%), so the model's internal threshold wasn't tuned to
+expect a cluster this large.
+
+**Why this happens with real data but didn't surface in Week 5's testing:**
+Week 5's synthetic data controlled the anomaly block size directly (16
+contiguous minutes out of 500, ~3.2%) and used per-minute readings with no
+PromQL rate()-smoothing effect duplicating values across multiple rows.
+Real Prometheus data introduces this smearing effect organically, which
+synthetic generation didn't expose as a testable case.
+
+**Disposition:** documented as a known limitation, not fixed. Two possible
+mitigations exist (raise contamination to better match real cluster sizes;
+deduplicate consecutive identical rate()-smoothed readings before fitting)
+but neither was implemented -- Phase 4's goal was validating the
+Prometheus -> PromQL -> IsolationForest pipeline works end-to-end, which it
+does. Tuning detection sensitivity is flagged as future work, not blocking.
+
+**Practical implication:** the current detector reliably catches brief,
+isolated spikes but may under-detect a sustained incident once its
+rate()-smoothed signature spans several consecutive query points --
+arguably the more realistic real-world case, which makes this a genuinely
+important limitation to state plainly in the capstone report rather than
+implying the detector performs uniformly well.
+
+---
+
 ## Open items (not yet decided)
 
 - **PR from `capstone-option-c` to `main`:** not yet opened. Original
