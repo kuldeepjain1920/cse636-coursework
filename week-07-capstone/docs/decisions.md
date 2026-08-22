@@ -500,6 +500,100 @@ duration, not just "reasonably fast."
 
 ---
 
+### D25 — Phase 6 handoff: placeholder constants for not-yet-built autoscaling policy
+
+**Context:** `remediation_agent.py`'s expected `peak_metrics` schema includes
+`max_replicas`, `target_cpu_pct`, and `error_budget_remaining` -- fields
+that are not measurable facts about the current system. They are
+autoscaling-policy inputs that would normally come from a Kubernetes
+`HorizontalPodAutoscaler`, which does not exist yet (Stage 3 -- predictive
+deploy / autoscaling policy -- has not been built). `order-svc`'s actual
+manifest currently has a bare `replicas: 1`, no HPA at all.
+
+**Decision:** `write_incident_handoff.py` queries `current_replicas` for
+real, live, via `kubectl get deployment order-svc -n orders`. The other
+three fields are hardcoded as explicit, clearly-commented placeholder
+constants (`max_replicas=10`, `target_cpu_pct=60`,
+`error_budget_remaining=1.0`) standing in for Stage 3's not-yet-built
+policy -- not silently presented as if they were real, measured, or
+configured values.
+
+**Why not wait for Stage 3 first:** Phase 6's purpose is proving the
+mechanical chain works (detection -> grouping -> RCA -> handoff ->
+remediation), which is independent of whether the autoscaling-policy
+inputs are real numbers or documented stand-ins. When Stage 3 is built,
+these three constants will need revisiting to pull real HPA-derived
+values instead -- a small, known, deferred piece of future work, not a
+blocker to Phase 6 proceeding now.
+
+---
+
+### D26 — subprocess `cwd` bug: Stage 5's relative paths resolved against the wrong directory
+
+**Finding:** `write_incident_handoff.py`'s first version invoked
+`remediation_agent.py` via `subprocess.run([sys.executable,
+"../remediation/remediation_agent.py", handoff_path])` without setting
+`cwd`. Since `remediation_agent.py`'s own code uses relative paths
+(`itsm_tickets/...`, `../handoffs/stage5-output.json`), those resolved
+against the *caller's* working directory (`observability/`), not
+`remediation/`'s -- the first real end-to-end run's ITSM ticket landed
+at `observability/itsm_tickets/TICKET-4987e34e.json` instead of
+`remediation/itsm_tickets/`.
+
+**Fix:** added `cwd="../remediation"` to the `subprocess.run()` call, and
+changed the script path argument from `"../remediation/remediation_agent.py"`
+to `"remediation_agent.py"` accordingly. Re-verified: the next ticket
+(`TICKET-f764ae73.json`) correctly landed at `remediation/itsm_tickets/`.
+
+**Separate, pre-existing note (not fixed by this bug):**
+`remediation_agent.py`'s `execute_scale` tool only updates its own
+in-memory `state["current_replicas"]` dict -- it does not call
+`kubectl scale` or otherwise touch the real cluster. This was true even
+in Stage 5's original standalone testing (before Phase 6 existed), so
+it is not a bug Phase 6 introduced, but it is now visible for the first
+time against *real* K8s infrastructure: a "remediated" outcome currently
+does not change the actual Deployment's replica count. Left as-is
+deliberately -- making `execute_scale` genuinely call `kubectl scale`
+would expand Stage 5's already-built-and-verified scope, which is a
+decision to make deliberately, not as a side effect of a path bug fix.
+
+---
+
+### D27 — remediation_agent.py's outcome taxonomy had no representation for "correctly decided no action needed" (fixed)
+
+**Finding:** A real INC-002 run (benign 9.9% CPU blip, 0% errors, 0ms
+extra latency) produced `outcome: "unresolved"`. Reading the agent's own
+postmortem, this was NOT a tool-avoidance bug (model narrating instead of
+calling tools) -- the agent correctly ran `dry_run_scale`, correctly
+determined a scale from 1->1 replicas would be a no-op, and correctly
+declined to call `execute_scale` or escalate, since neither action was
+warranted for a genuinely benign, zero-impact spike. This was sound
+reasoning, not a malfunction.
+
+**Root cause:** `remediation_agent.py`'s `outcome` variable was only ever
+reassigned inside `execute_scale`'s branch of the tool-handling logic --
+there was no code path representing "agent legitimately concluded no
+remediation is warranted," so the loop's initial `outcome = "unresolved"`
+simply never got updated for this valid, complete resolution.
+
+**Fix:** added tracking for whether `dry_run_scale` was called and
+whether its own computed target equals `current_replicas` (a genuine
+no-op). After the loop, if `outcome` is still `"unresolved"` AND a
+dry-run genuinely confirmed no scale was needed, it's reclassified to
+`"resolved_no_action_needed"`. Deliberately does NOT reclassify cases
+where a dry-run recommended a REAL scale but `execute_scale` was never
+called -- that pattern stays `"unresolved"`, since it would indicate the
+Week 6 tool-avoidance bug resurfacing, not a valid resolution.
+
+**Verified:** re-ran the same benign-incident scenario after the fix --
+identical agent reasoning, now correctly produces
+`outcome: "resolved_no_action_needed"` instead of `"unresolved"`. Both
+tickets kept as before/after evidence: `TICKET-f764ae73.json`
+(pre-fix, `unresolved`) and `TICKET-34cd34f0.json` (post-fix,
+`resolved_no_action_needed`).
+
+---
+
 ## Open items (not yet decided)
 
 - **PR from `capstone-option-c` to `main`:** not yet opened. Original

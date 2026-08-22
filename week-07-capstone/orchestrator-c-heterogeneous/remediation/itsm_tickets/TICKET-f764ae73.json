@@ -1,0 +1,17 @@
+{
+  "ticket_id": "TICKET-f764ae73",
+  "incident_id": "INC-002",
+  "service": "order-svc",
+  "created_at": "2026-08-22T18:24:10.743701+00:00",
+  "outcome": "unresolved",
+  "rca_summary": {
+    "probable_cause": "A brief CPU spike on order-svc, likely caused by a scheduled background task or a small batch job, with no observable impact on error rate or latency.",
+    "evidence": [
+      "CPU utilization peaked at 9.9%, which is elevated enough to be flagged but remains well below critical thresholds, suggesting a transient or lightweight workload spike.",
+      "Error rate was 0.0% throughout the incident window, ruling out application errors, crashes, or downstream dependency failures as contributing factors.",
+      "Latency P99 was 0.0ms, indicating no degradation in request handling performance and that end users were not affected during the incident window.",
+      "Only 2 anomalous data points were flagged over a 120-second window, consistent with a short-lived and isolated spike rather than a sustained or growing problem."
+    ],
+    "confidence": "low"
+  }
+}

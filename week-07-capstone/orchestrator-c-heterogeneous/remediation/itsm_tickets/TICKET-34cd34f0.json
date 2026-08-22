@@ -1,16 +1,9 @@
 {
+  "ticket_id": "TICKET-34cd34f0",
   "incident_id": "INC-002",
   "service": "order-svc",
-  "detected_at": "2026-08-22T19:55:56.174999952",
-  "peak_metrics": {
-    "cpu_utilization_pct": 9.8,
-    "error_rate": 0.0,
-    "p99_latency_ms": 0.0,
-    "error_budget_remaining": 1.0,
-    "current_replicas": 1,
-    "max_replicas": 10,
-    "target_cpu_pct": 60
-  },
+  "created_at": "2026-08-22T19:58:07.155898+00:00",
+  "outcome": "resolved_no_action_needed",
   "rca_summary": {
     "probable_cause": "A brief, isolated CPU spike to 9.8% occurred at a single point in time with no corresponding error rate or latency degradation, suggesting a transient background process or scheduled task momentarily consumed CPU resources without impacting service health.",
     "evidence": [

@@ -159,7 +159,6 @@ def write_stage5_handoff(incident: dict, outcome: str, ticket: dict, summary: st
         json.dump(out, f, indent=2)
     print("[HANDOFF] Wrote ../handoffs/stage5-output.json")
 
-
 def run_remediation(incident_path: str):
     incident = load_incident(incident_path)
     state = dict(incident["peak_metrics"])
@@ -188,6 +187,8 @@ Rules:
 
     outcome = "unresolved"
     final_summary = ""
+    dry_run_called = False        # NEW: track whether a dry-run genuinely happened
+    dry_run_was_noop = False      # NEW: track whether that dry-run found no scale needed
 
     for _ in range(8):
         response = client.messages.create(
@@ -210,7 +211,15 @@ Rules:
             elif block.type == "tool_use":
                 tool_name, tool_input = block.name, block.input
 
-                if tool_name == "execute_scale":
+                if tool_name == "dry_run_scale":
+                    dry_run_called = True
+                    # NEW: recompute the same target dry_run_scale itself reports,
+                    # so we can tell a genuine no-op apart from "agent never got
+                    # around to calling execute_scale" (the Week 6 tool-avoidance bug)
+                    target = min(compute_target_replicas(state), state.get("max_replicas", 0))
+                    dry_run_was_noop = (target == state.get("current_replicas"))
+                    tool_result = execute_tool(tool_name, tool_input, state)
+                elif tool_name == "execute_scale":
                     if not autonomy_enabled():
                         tool_result = "REFUSED: autonomy kill switch is OFF. Escalating to human on-call."
                         outcome = "escalated_kill_switch"
@@ -239,10 +248,17 @@ Rules:
                 })
         messages.append({"role": "user", "content": tool_results})
 
+    # NEW: D27 fix -- only reclassify "unresolved" if a dry-run genuinely
+    # confirmed no scale-out was needed. If dry-run recommended a REAL scale
+    # but execute_scale was never called, outcome correctly stays "unresolved"
+    # -- that's the Week 6 tool-avoidance bug pattern, not a valid resolution,
+    # and should keep surfacing as a problem worth investigating.
+    if outcome == "unresolved" and dry_run_called and dry_run_was_noop:
+        outcome = "resolved_no_action_needed"
+
     ticket = create_itsm_ticket(incident, outcome)
     write_stage5_handoff(incident, outcome, ticket, final_summary)
     print(f"\n[RESULT] {incident['incident_id']}: {outcome}")
-
 
 if __name__ == "__main__":
     incident_file = sys.argv[1] if len(sys.argv) > 1 else "../handoffs/stage4-incident.json"
