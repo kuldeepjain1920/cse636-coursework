@@ -1,0 +1,11 @@
+# Prometheus Helm values -- captures the production-shaping config from
+# Stage 4 Phase 3 (fresh install) and Phase 5/D24 (scrape interval fix).
+# Reinstall with: helm install prometheus prometheus-community/prometheus \
+#   --namespace monitoring -f k8s/monitoring/prometheus-values.yaml
+
+server:
+  persistentVolume:
+    enabled: false  # local Docker Desktop cluster -- no persistent storage needed
+  global:
+    scrape_interval: 5s   # D24: default 60s was too coarse to catch brief Gauge-based CPU spikes
+    scrape_timeout: 4s    # must stay < scrape_interval, or Prometheus refuses to start

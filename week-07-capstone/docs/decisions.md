@@ -459,6 +459,47 @@ implying the detector performs uniformly well.
 
 ---
 
+### D24 — Prometheus scrape interval too coarse to catch brief CPU spikes (Gauge visibility gap)
+
+**Finding:** Phase 5's Grafana dashboard initially showed a flat CPU % panel
+(order_svc_cpu_percent) during a real load_generator.py spike, even though
+the Error Rate panel (rate()-based, Counter-backed) correctly showed the
+same incident. Direct query_range checks against Prometheus's raw API
+confirmed order_svc_cpu_percent was genuinely flat/zero the whole window --
+not a Grafana rendering issue.
+
+**Root cause:** order_svc_cpu_percent is a Gauge, sampled only at scrape
+time (Prometheus's default scrape_interval was 60s). The load generator's
+spike (a few seconds of elevated CPU) happened entirely between two scrape
+ticks -- Prometheus simply never caught it mid-flight. order_svc_requests_total
+(a Counter) never has this problem, since every increment is cumulative and
+can't be "missed" between scrapes -- only Gauges are vulnerable to this kind
+of timing gap.
+
+**Fix:** reduced Prometheus's scrape_interval to 5s via `helm upgrade`,
+making a catch ~12x more likely. First attempt only set scrape_interval
+without adjusting scrape_timeout (left at its old default of 10s), which
+Prometheus correctly rejected on startup ("global scrape timeout greater
+than scrape interval" -- Prometheus requires timeout <= interval, since
+otherwise a slow-to-timeout scrape could still be outstanding when the
+next interval-triggered scrape starts, creating overlapping requests
+against the same target) -- the server pod went into CrashLoopBackOff.
+Corrected by setting scrape_timeout=4s alongside the new interval. Also
+needed an explicit `kubectl rollout restart deployment/prometheus-server`
+-- a ConfigMap update alone doesn't make a running pod re-read its config;
+only a fresh rollout picks it up.
+
+**Verified:** re-ran load_generator.py after the fix; all three panels
+(CPU %, Error Rate, p99 Latency) now show the same spike at the same
+timestamp, confirmed via Grafana screenshot.
+
+**Practical implication:** a 60s (or even 15s) scrape interval is not
+automatically "good enough" to observe short-lived Gauge-based spikes;
+the true correctness criterion is scrape_interval << typical incident
+duration, not just "reasonably fast."
+
+---
+
 ## Open items (not yet decided)
 
 - **PR from `capstone-option-c` to `main`:** not yet opened. Original

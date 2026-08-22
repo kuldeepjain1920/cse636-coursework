@@ -1,0 +1,13 @@
+# Grafana Helm values.
+# Reinstall with: helm install grafana grafana/grafana \
+#   --namespace monitoring -f k8s/monitoring/grafana-values.yaml
+#
+# NOTE: adminPassword is deliberately NOT set here (left to Helm's default
+# auto-generated random password), per the decision to avoid hardcoding
+# credentials even in a local-dev context. After install, retrieve it with:
+#   kubectl get secret --namespace monitoring grafana \
+#     -o jsonpath="{.data.admin-password}" | base64 --decode; echo
+
+persistence:
+  enabled: false  # local Docker Desktop cluster -- dashboard config is instead
+                   # captured separately as dashboard-order-svc-incident.json
