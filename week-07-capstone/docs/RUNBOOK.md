@@ -19,16 +19,18 @@ high-level design, see `docs/architecture.md`.
 | `terraform` | Stage 2 — infrastructure as code |
 | `conftest` | Stage 2 — OPA policy enforcement against Terraform plans |
 | `slsa-verifier` | Stage 2 — verifies (and correctly rejects) the SLSA provenance document |
-| Docker Desktop, with local Kubernetes enabled | Stage 4 — containerizing and (soon) deploying `order-svc` |
+| Docker Desktop, with local Kubernetes enabled | Stage 4 — containerizing and deploying `order-svc`, running Prometheus/Grafana |
+| `helm` | Stage 4 production-shaping — installs Prometheus and Grafana |
 | Python 3.12+ | All stages |
 | `pip` | Installing per-stage dependencies |
-| An Anthropic API key | Stage 5's remediation agent calls the Claude API |
+| An Anthropic API key | Stage 5's remediation agent, and (as of Phase 6) Stage 4's `rca_agent.py`, both call the Claude API |
 
 ```bash
 gcloud --version
 terraform --version
 conftest --version
 docker --version
+helm version
 python3 --version
 ```
 
@@ -62,10 +64,11 @@ ANTHROPIC_API_KEY=your-key-here
 EOF
 ```
 
-Required for Stage 5's `remediation_agent.py`, which calls the Claude API
-directly (not via Claude Code). `python-dotenv` finds this by walking up
-from the current working directory, so it works regardless of which
-stage's folder you're running from.
+Required for Stage 5's `remediation_agent.py` and Stage 4's
+`rca_agent.py`, both of which call the Claude API directly (not via
+Claude Code). `python-dotenv` finds this by walking up from the current
+working directory, so it works regardless of which stage's folder
+you're running from.
 
 ---
 
@@ -172,19 +175,19 @@ cd week-07-capstone/orchestrator-c-heterogeneous/remediation
 ```
 
 Reuses `venv-week6` (already has `anthropic` and `python-dotenv`
-installed from Week 6).
+installed from Week 6). This section runs `remediation_agent.py`
+**standalone**, against the hand-written `stage4-incident.json` fixture
+— for running it as part of the real, Phase-6-chained pipeline, see §5.6.
 
 ```bash
 python3 remediation_agent.py
 ```
 
-Reads `../handoffs/stage4-incident.json` (currently a hand-written
-`INC-002` fixture — will be replaced by Stage 4's real output once the
-production-shaped pipeline is complete). Runs the ReAct loop, and — if
+Reads `../handoffs/stage4-incident.json`. Runs the ReAct loop, and — if
 all automated gates pass — pauses for human approval at
 `[APPROVAL REQUIRED] execute_scale on order-svc`.
 
-**To exercise the other two guardrail paths:**
+**To exercise the other guardrail paths:**
 
 ```bash
 # Decline the approval prompt (type anything other than 'y')
@@ -196,6 +199,13 @@ python3 remediation_agent.py
 export AUTONOMY_KILL_SWITCH=on   # reset afterward
 ```
 
+**A fourth outcome, `resolved_no_action_needed`, was added during Phase 6
+(§5.6)** — it only appears when a real, low-impact incident causes the
+agent to correctly determine via `dry_run_scale` that no scaling is
+warranted. It cannot be triggered against the original hand-written
+fixture (which describes a genuine CPU-saturation incident); it requires
+a real, benign incident from the Phase 4-6 chain.
+
 Each run overwrites `../handoffs/stage5-output.json` and writes a new,
 uniquely-named ticket to `itsm_tickets/` — commit each outcome separately
 if you want a clean git history of each path (see `decisions.md` D10).
@@ -206,7 +216,7 @@ deactivate
 
 ---
 
-## 4. Stage 4 — Observability (Steps 1-4, current build)
+## 4. Stage 4 — Observability (Steps 1-4, base build)
 
 ```bash
 cd ~/cse636-coursework/week-07-capstone/orchestrator-c-heterogeneous/observability/order-svc
@@ -266,7 +276,9 @@ docker stop order-svc; docker rm order-svc
 ```
 
 Run before any `docker run` if a container with this name already exists
-— names must be unique among existing containers.
+— names must be unique among existing containers. **Note:** this
+standalone Docker container is torn down permanently once §5 begins —
+`order-svc` moves to running inside Kubernetes instead.
 
 ### 4.4 Verify OTel spans
 
@@ -314,12 +326,253 @@ docker image prune   # optional, reclaims disk space from old rebuilds
 
 ---
 
-## 5. Stage 4 — Production-shaped (Phases 1-6)
+## 5. Stage 4 — Production-shaped (Phases 1-6, all complete)
 
-**Not yet built as of this writing.** This section will be filled in as
-each phase is completed — see `docs/CONTINUATION.md` §6 for the detailed
-phase-by-phase plan (K8s deployment, Prometheus scrape config, PromQL
-query replacing the CSV load, Grafana dashboard, chaining into Stage 5).
+This section covers K8s deployment, Prometheus/Grafana, PromQL-based
+detection, and the full chain into Stage 5. It replaces §4's standalone
+Docker container — `order-svc` now runs inside Kubernetes for the rest
+of the capstone.
+
+**Every-session operational sequence** (needed every time you resume
+work on this section, not just once):
+
+```bash
+kubectl cluster-info
+```
+
+Confirms Docker Desktop's Kubernetes is up. If it was closed, open Docker
+Desktop and wait ~1-3 minutes before this succeeds. **Known quirk:**
+closing Docker Desktop's dashboard window does not fully quit it — its
+VM backend keeps running until quit via the menu bar whale icon → *Quit
+Docker Desktop* (`ps aux | grep -i virtualization` to check).
+
+```bash
+kubectl get pods -n orders
+kubectl get pods -n monitoring
+```
+
+Confirm `order-svc` is `1/1 Running`, and Prometheus's 5 components plus
+Grafana are all `Running`.
+
+### 5.1 Phase 1 — Deploy `order-svc` to Kubernetes
+
+```bash
+cd ~/cse636-coursework/week-07-capstone/orchestrator-c-heterogeneous/observability/order-svc/k8s
+kubectl create namespace orders
+kubectl apply -f deployment.yaml
+```
+
+Deploys `order-svc` as a K8s Deployment + ClusterIP Service, in its own
+`orders` namespace (not `default`) for realism. `imagePullPolicy: Never`
+is required — the image is only built locally, never pushed to a
+registry — which means any rebuild needs an explicit
+`kubectl rollout restart deployment/order-svc` to actually be picked up
+(the tag never changes, so K8s won't notice a new image on its own).
+
+```bash
+kubectl get pods,deployment,service -n orders
+kubectl run curltest --image=curlimages/curl --rm -it --restart=Never -n orders -- \
+  curl -s http://order-svc:8080/health
+```
+
+Confirms the pod is `Running`, and that the Service correctly routes to
+it from inside the cluster.
+
+### 5.2 Phase 2 — Prometheus-format metrics endpoint
+
+No new commands beyond a `docker build` + `kubectl rollout restart` —
+`app.py` was updated to expose `/metrics/prometheus` via
+`prometheus_client`, alongside (not replacing) the original JSON
+`/metrics` endpoint still used by Stage 5.
+
+```bash
+docker build -t order-svc:latest .
+kubectl rollout restart deployment/order-svc -n orders
+kubectl run curltest --image=curlimages/curl --rm -it --restart=Never -n orders -- \
+  curl -s http://order-svc:8080/metrics/prometheus
+```
+
+Expect real Prometheus text-exposition format output — `order_svc_cpu_percent`
+(Gauge), `order_svc_requests_total{status}` (Counter), and
+`order_svc_request_duration_seconds` (Histogram), alongside
+Python/process default metrics `prometheus_client` adds automatically.
+
+### 5.3 Phase 3 — Install Prometheus, wire the scrape target
+
+```bash
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+kubectl create namespace monitoring
+```
+
+```bash
+cd ~/cse636-coursework/week-07-capstone/orchestrator-c-heterogeneous/k8s/monitoring
+helm install prometheus prometheus-community/prometheus \
+  --namespace monitoring \
+  -f prometheus-values.yaml
+```
+
+`prometheus-values.yaml` already includes the D24 fix
+(`scrape_interval: 5s`, `scrape_timeout: 4s`) — this is a **fresh
+install**, not a reuse of Week 4's KEDA-stretch-goal Prometheus, which
+had been torn down.
+
+The Service annotations enabling scrape discovery
+(`prometheus.io/scrape`, `prometheus.io/path`, `prometheus.io/port`) are
+already present on `order-svc`'s Service — **must be on the Service's
+metadata, not the Deployment's** (a real mistake made and corrected
+during this build — see `decisions.md` for the full narrative).
+
+```bash
+kubectl get pods -n monitoring
+kubectl port-forward -n monitoring svc/prometheus-server 9090:80
+```
+
+In a browser, `http://localhost:9090/targets` should show `order-svc`'s
+target as `UP`, scraping `/metrics/prometheus`.
+
+### 5.4 Phase 4 — PromQL-based anomaly detection
+
+```bash
+cd ~/cse636-coursework/week-07-capstone/orchestrator-c-heterogeneous/observability
+python3 -m venv venv-anomaly-detector
+source venv-anomaly-detector/bin/activate
+pip install -r requirements.txt
+```
+
+`requirements.txt` here includes `requests`, `pandas`, `scikit-learn`
+(for detection), plus `anthropic`/`python-dotenv` (added in Phase 6, for
+`rca_agent.py`) — this single venv now covers the entire Phase 4-6 chain.
+
+**Requires the Prometheus port-forward from §5.3 to still be running.**
+
+```bash
+python3 anomaly_detector.py
+```
+
+Queries Prometheus's `query_range` API via PromQL, feeds real data into
+the unchanged `fit_detector()` (IsolationForest) logic from Week 5.
+Prints how many anomalies were flagged out of how many points fetched.
+
+**To see a real, correlated incident rather than idle noise, generate
+load first:**
+
+```bash
+kubectl port-forward -n orders svc/order-svc 8080:8080
+```
+
+(separate terminal, leave running)
+
+```bash
+python3 load_generator.py
+python3 anomaly_detector.py
+```
+
+### 5.5 Phase 5 — Grafana dashboard
+
+```bash
+cd ~/cse636-coursework/week-07-capstone/orchestrator-c-heterogeneous/k8s/monitoring
+helm repo add grafana https://grafana.github.io/helm-charts
+helm repo update
+helm install grafana grafana/grafana \
+  --namespace monitoring \
+  -f grafana-values.yaml
+```
+
+`grafana-values.yaml` deliberately does NOT set an admin password —
+Helm auto-generates a random one, retrieved via:
+
+```bash
+kubectl get secret --namespace monitoring grafana \
+  -o jsonpath="{.data.admin-password}" | base64 --decode; echo
+```
+
+```bash
+kubectl port-forward -n monitoring svc/grafana 3000:80
+```
+
+Log in at `http://localhost:3000` (`admin` / the retrieved password),
+add a Prometheus datasource (`http://prometheus-server.monitoring.svc.cluster.local`,
+name `order-svc-prometheus`), then **Dashboards → Import** using
+`dashboard-order-svc-incident.json`.
+
+**Known caveat:** the dashboard JSON has a hardcoded datasource UID from
+the original install — on a fresh install, Grafana's import screen will
+need the datasource re-mapped by name, since a fresh datasource gets a
+different UID.
+
+To see a real incident on the dashboard, generate fresh load first
+(same as §5.4), then set the dashboard's time range to a window covering
+when the load ran.
+
+### 5.6 Phase 6 — Chain into Stage 5
+
+```bash
+cd ~/cse636-coursework/week-07-capstone/orchestrator-c-heterogeneous/observability
+source venv-anomaly-detector/bin/activate
+```
+
+**Requires both port-forwards (Prometheus 9090, `order-svc` 8080) from
+§5.3/§5.4 to still be running.**
+
+```bash
+python3 write_incident_handoff.py
+```
+
+Runs the full real chain: `anomaly_detector.py` → `alert_grouper.py`
+(standalone copy of Week 5's `group_alerts()`, unchanged) →
+`rca_agent.py` (a **real Claude API call** — deliberately NOT a copy of
+Week 5's simulated `if/else` version, since a working API key is
+available here) → writes the real `handoffs/stage4-incident.json`
+(mapping `current_replicas` from a live `kubectl get deployment` query,
+plus explicit placeholder constants for `max_replicas`/`target_cpu_pct`/
+`error_budget_remaining` — Stage 3's autoscaling policy doesn't exist
+yet, see `decisions.md` D25) → `subprocess`-chains into
+`remediation_agent.py` (unmodified).
+
+If the agent proposes a scale, you'll be prompted at
+`[APPROVAL REQUIRED] execute_scale on order-svc`, same as §3. Depending
+on the incident's real severity, you may see any of: `remediated`,
+`escalated_declined`, `escalated_kill_switch`, `escalated_rate_limit`,
+`escalated_error_budget`, or `resolved_no_action_needed` (this last one
+added specifically to correctly represent a real, benign incident where
+the agent's own dry-run confirmed no scaling was warranted —
+`decisions.md` D27).
+
+**To generate a fresh incident first** (rather than whatever's currently
+in Prometheus's recent window):
+
+```bash
+python3 load_generator.py
+python3 write_incident_handoff.py
+```
+
+**Verify the ticket/handoff landed in the right place:**
+
+```bash
+find ~/cse636-coursework/week-07-capstone/orchestrator-c-heterogeneous -name "TICKET-*.json"
+```
+
+Should show new tickets under `remediation/itsm_tickets/`, not
+`observability/itsm_tickets/` — an earlier version of
+`write_incident_handoff.py` had a `subprocess` `cwd` bug that caused
+exactly this misplacement; it's since been fixed
+(`cwd="../remediation"` on the `subprocess.run()` call — see
+`decisions.md` D26).
+
+### 5.7 Known, deliberate limitations (not bugs to fix casually)
+
+- **Local dev only:** this entire chain reaches Prometheus/`order-svc`
+  via `kubectl port-forward`, not via in-cluster service discovery — not
+  production-realistic, deliberately deferred (`decisions.md` D22).
+- **`execute_scale` remains simulated:** it updates
+  `remediation_agent.py`'s in-memory state only, never calls `kubectl
+  scale` — true since Stage 5's original build, not something Phase 6
+  introduced, deliberately not changed (`decisions.md` D26).
+- **`max_replicas`/`target_cpu_pct`/`error_budget_remaining` are
+  hardcoded placeholders**, not real measured or configured values —
+  Stage 3 (autoscaling policy) hasn't been built yet (`decisions.md`
+  D25).
 
 ---
 
@@ -348,3 +601,19 @@ lsof -i :8080
 
 Confirms what's actually running before assuming a fresh start is needed
 — avoids redundant rebuilds/restarts.
+
+```bash
+kubectl get pods -n <namespace>
+```
+
+Same idea, for anything running in Kubernetes rather than plain Docker
+(§5 onward) — check actual pod status before assuming a rebuild/restart
+is needed, and before trusting any agent's or tool's claim of success.
+
+```bash
+find <path> -name "<pattern>"
+```
+
+Used repeatedly to confirm exactly where a file actually landed (e.g.
+ITSM tickets, handoff JSON) rather than assuming a path based on the
+code alone — this caught the real D26 `cwd` bug.

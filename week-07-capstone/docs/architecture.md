@@ -76,7 +76,7 @@ flowchart TD
 | Stage 1 (CI/CD) | Built in Week 3, reused as-is |
 | Stage 2 (IaC) | ✅ Built this capstone (see §3) |
 | Stage 3 (predictive deploy) | ⬜ Not yet built |
-| Stage 4 (observability) | 🔶 Partially built, being upgraded to production-shaped (see §5) |
+| Stage 4 (observability) | ✅ Built this capstone, production-shaped (see §5) |
 | Stage 5 (auto-remediation) | ✅ Built this capstone (see §4) |
 
 ---
@@ -189,12 +189,20 @@ separately:**
 | `escalated_declined` | Operator declined; correctly escalated, no state change |
 | `escalated_kill_switch` | Kill switch blocked before the approval prompt ever appeared; agent's own postmortem correctly recognized it as a system-enforced gate, not an error |
 
-Full detail: `orchestrator-c-heterogeneous/remediation/` (README pending —
-see §7).
+**Later, during Stage 4 Phase 6 wiring (see §5b), a fourth outcome path
+was added:** `resolved_no_action_needed` — the original taxonomy had no
+way to represent an agent correctly deciding a dry-run showed no scale
+was warranted; this was a real gap surfaced and fixed against genuine
+Prometheus-sourced incident data (`decisions.md` D27). `execute_scale`
+itself remains simulated (updates in-memory state only, never calls
+`kubectl scale`) — a deliberate, documented limitation, not yet closed
+(`decisions.md` D26).
+
+Full detail: `orchestrator-c-heterogeneous/remediation/README.md`.
 
 ---
 
-## 5. Stage 4 — Observability (in progress, being upgraded)
+## 5. Stage 4 — Observability (built, verified, fully production-shaped)
 
 ### 5a. What's built and verified (Steps 1-4)
 
@@ -220,30 +228,75 @@ see `decisions.md` D17-D18), clean recovery.
    change what `cpu_count()` reports); the actual fix was switching to
    `psutil.Process().cpu_percent()` (per-process, not system-wide).
 
-### 5b. What's being added (production-shaped Step 5-6)
+### 5b. Production-shaping, Phases 1-6 (all complete, all committed)
 
 ```mermaid
 flowchart TD
-    Svc["order-svc<br/>(K8s Deployment + Service)"] -->|"/metrics<br/>Prometheus format"| Prom["Prometheus<br/>(reused from Wk4 KEDA stretch goal)"]
-    Prom --> Grafana["Grafana dashboard<br/>(live incident view)"]
-    Prom -->|"PromQL query_range"| Detector["anomaly_detector.py<br/>(Week 5, unchanged)"]
-    Detector --> Grouper["alert_grouper.py<br/>(Week 5, unchanged)"]
-    Grouper --> RCA["rca_agent.py<br/>(Week 5, unchanged)"]
-    RCA --> Handoff["handoffs/stage4-incident.json<br/>(real, not hand-written)"]
-    Handoff -->|subprocess| Stage5["Stage 5:<br/>remediation_agent.py"]
+    Svc["order-svc<br/>(K8s Deployment + Service, orders namespace)"] -->|"/metrics/prometheus<br/>Prometheus format"| Prom["Prometheus<br/>(fresh install, monitoring namespace)"]
+    Prom --> Grafana["Grafana dashboard<br/>(live incident view, 3 panels)"]
+    Prom -->|"PromQL query_range"| Detector["anomaly_detector.py<br/>(standalone, real Prometheus data)"]
+    Detector --> Grouper["alert_grouper.py<br/>(standalone copy of Wk5 logic, unchanged)"]
+    Grouper --> RCA["rca_agent.py<br/>(REAL Claude API call, NOT Week 5's simulated version)"]
+    RCA --> Handoff["handoffs/stage4-incident.json<br/>(real, written by write_incident_handoff.py)"]
+    Handoff -->|subprocess| Stage5["Stage 5:<br/>remediation_agent.py (unmodified)"]
 ```
+
+**Phase-by-phase summary:**
+- **Phase 1:** `order-svc` deployed to Docker Desktop's K8s, moved to its
+  own `orders` namespace (not `default`) for realism.
+- **Phase 2:** `app.py` exposes a real Prometheus-format
+  `/metrics/prometheus` endpoint via `prometheus_client` — the original
+  custom JSON `/metrics` endpoint is untouched and still used by Stage 5.
+- **Phase 3:** A fresh Prometheus instance (Helm-installed into
+  `monitoring`, NOT reused from Week 4's KEDA stretch goal — that
+  environment had been torn down) scrapes `order-svc` via
+  `prometheus.io/*` Service annotations.
+- **Phase 4:** `anomaly_detector.py` (standalone, does not import from
+  `week-05/`) queries Prometheus's `query_range` API via PromQL, feeding
+  real data into the unchanged `fit_detector()` (IsolationForest) logic
+  from Week 5.
+- **Phase 5:** A Grafana dashboard (3 panels: CPU %, Error Rate, p99
+  Latency) verified showing a real, correlated incident from a live
+  `load_generator.py` run.
+- **Phase 6:** `alert_grouper.py` (standalone copy of Week 5's
+  `group_alerts()`, unchanged) and `rca_agent.py` (a **deliberate
+  upgrade**, not a copy — makes a real Claude API call, since
+  `ANTHROPIC_API_KEY` is genuinely available here, unlike Week 5 where it
+  used simulated `if/else` threshold logic) feed into
+  `write_incident_handoff.py`, which writes the real
+  `handoffs/stage4-incident.json` and chains into Stage 5's
+  `remediation_agent.py` (unmodified) via `subprocess`.
 
 **Why this design over the simpler alternative:** the originally-planned
 approach (the load generator recording its own traffic observations and
 feeding them directly to the detector) was rejected as architecturally
 biased — real service telemetry must be independent of whoever is
 generating load against it. This design decouples the two, mirroring
-real Prometheus scrape behavior, and reuses infrastructure (Prometheus,
-KEDA) already proven working in Week 4. Full reasoning: `decisions.md` D20.
+real Prometheus scrape behavior. Full reasoning: `decisions.md` D20.
 
 **What is NOT changing:** `app.py`'s core logic, the `Dockerfile`, the
 existing OTel spans (still valid — remain secondary evidence, not the
-primary data path), and `load_generator.py` — all carried forward as-is.
+primary data path), `load_generator.py`, `fit_detector()`/
+`FEATURE_COLUMNS`, `group_alerts()`, and `remediation_agent.py` itself
+(Stage 5's code was never modified — Phase 6 invokes it as-is).
+
+**Four real findings from building Phases 1-6, all documented in
+`decisions.md`:**
+- **D22:** local dev reaches Prometheus/`order-svc` via `kubectl
+  port-forward` — explicitly not production-realistic; a genuine, still-open
+  tradeoff (see §7).
+- **D23:** IsolationForest (contamination=0.04) can miss a sustained
+  incident once `rate()`'s 5-minute smoothing duplicates readings across
+  several consecutive query points.
+- **D24:** Prometheus's default 60s scrape interval was too coarse to
+  reliably catch brief Gauge-based CPU spikes; fixed by reducing to 5s
+  (with a real `scrape_timeout` config bug hit and fixed along the way).
+- **D25-D27:** Phase 6 surfaced three more real findings — placeholder
+  constants for not-yet-built Stage 3 autoscaling inputs (D25), a
+  `subprocess` `cwd` bug causing ITSM tickets/handoffs to land in the
+  wrong directory (D26), and a genuine gap in `remediation_agent.py`'s
+  outcome taxonomy for "correctly decided no action needed," which was
+  fixed (D27).
 
 ---
 
@@ -256,8 +309,8 @@ artifact/section that satisfies it.
 |---|---|---|
 | End-to-end pipeline integration | 20 | §1 (pipeline diagram) + §2 (handoff design) once all stages are wired; **not yet complete** — Stage 3 and full wiring still pending |
 | Agentic IaC with policy enforcement | 15 | §3 — `orchestrator-c-heterogeneous/iac/`, fully built and verified |
-| Agent security and guardrails | 15 | §3's two real incidents (unprompted `apply`, injection refusal) + §4's blast-radius chain (4 gates, all 3 outcome paths verified) |
-| Observability (service + agent telemetry) | 10 | §5 — service-level spans (Step 3) + Week 5's agent-level `gen_ai.*` spans; production-shaped Prometheus/Grafana in progress |
+| Agent security and guardrails | 15 | §3's two real incidents (unprompted `apply`, injection refusal) + §4's blast-radius chain (4 gates, all outcome paths verified, including the Phase 6-added `resolved_no_action_needed` path) |
+| Observability (service + agent telemetry) | 10 | §5 — service-level spans (Step 3) + Week 5's agent-level `gen_ai.*` spans; production-shaped Prometheus/Grafana pipeline fully built, verified, and committed (Phases 1-6) |
 | Auto-remediation with blast-radius control | 10 | §4 — fully built and verified |
 | Audit trail and governance | 10 | SLSA provenance (§3) + `handoffs/*.json` files (audit trail per stage) + ITSM tickets (§4) |
 | Presentation clarity and demo quality | 10 | Demo script — **not yet built** (document 7 in the docs queue) |
@@ -268,12 +321,15 @@ artifact/section that satisfies it.
 ## 7. What's still open
 
 - Stage 3 (predictive deploy) — not started.
-- Full 5-stage wiring/chaining end to end — not started (Stages 2 and 5
-  exist independently but aren't yet chained to each other or to Stage 4).
+- Full 5-stage wiring/chaining end to end — Stages 4→5 now chained
+  (Phase 6); Stage 3 and its connections to Stages 2/4 still not started.
 - Options B and A — not started.
-- Per-stage READMEs for `observability/` and `remediation/` — pending
-  (document 5 in the docs queue).
 - PR from `capstone-option-c` to `main` — not yet opened.
+- `execute_scale` (Stage 5) remains simulated (updates in-memory state,
+  never calls `kubectl scale`) — deliberately deferred, see `decisions.md`
+  D26.
+- The Phase 4-6 chain runs via local `kubectl port-forward`, not as an
+  in-cluster K8s Job — deliberately deferred, see `decisions.md` D22.
 
 See `docs/CONTINUATION.md` for the live, detailed status table and the
 next-immediate-task breakdown.
