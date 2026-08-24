@@ -5,7 +5,13 @@ work on this capstone with full context, without needing the original
 (very long) conversation history. Keep this updated at the end of each
 work session.
 
-**Last updated:** after fully closing out Stage 4's production-shaping
+**Last updated:** after Stage 3 Phase 1 (`risk_scorer.py`) built, tested,
+and committed. A real bug (PromQL vector-matching in the shared
+error-rate query) was found and fixed in both `risk_scorer.py` and
+`anomaly_detector.py` — see `decisions.md` D28. **Next major work item:
+Stage 3 Phase 2 (canary) — not started.**
+
+** One before last updated:** after fully closing out Stage 4's production-shaping
 arc. Phase 6's full chain (`anomaly_detector.py` → `alert_grouper.py` →
 `rca_agent.py` → `write_incident_handoff.py` → `remediation_agent.py`)
 is built, verified end-to-end multiple times against real data, and
@@ -16,7 +22,7 @@ both been fully updated to reflect Phases 1-6 as complete — those
 updates are drafted and delivered but **not yet locally replaced or
 committed** (see §10). Documents 6 (capstone report) and 7 (demo script)
 remain deliberately deferred — see §10. **Next major work item: Stage 3
-(predictive deploy) — not started.**
+(predictive deploy) — Phase 1 done (`risk_scorer.py`); Phases 2-4 not started **
 
 ---
 
@@ -192,8 +198,8 @@ cse636-coursework/                          [repo root, branch: capstone-option-
 | Stage 4 production-shaping Phase 5 (Grafana dashboard) | ✅ Done — real finding D24 | `92adf5b` |
 | **Stage 4 Phase 6 (chain into Stage 5)** | ✅ **Done — built, verified end-to-end multiple times, all 3 design questions resolved, D25-D27 written and inserted, committed** | `28c684f` |
 | **Stage 4 — entire production-shaping arc (Phases 1-6)** | ✅ **Fully complete and committed** | — |
-| Stage 3 (predictive deploy) | ⬜ **Design Decided, Not Yet Built** | — |
-| Wiring all 5 stages end-to-end | 🔶 Stages 4→5 now chained (Phase 6); Stage 3 and its connections not started | — |
+| Stage 3 (predictive deploy) | 🔶 Phase 1 done (`risk_scorer.py`); Phases 2-4 not started | `76320fd` |
+| Wiring all 5 stages end-to-end | 🔶 Stages 4→5 chained (Phase 6); Stage 3 Phase 1 built standalone, not yet wired into the chain | — |
 | Option B (GitHub Actions) | ⬜ Not started | — |
 | Option A (single script) | ⬜ Not started | — |
 | `docs/decisions.md` (doc 1) | ✅ D1-D27 all committed | `be01265` (original), updated continuously, D25-D27 via `28c684f` |
@@ -313,10 +319,20 @@ remediation flow was NOT modified by Phase 6).
 
 ---
 
-## 7. Stage 3 — Predictive Deploy: Design Decided, Not Yet Built
+## 7. Stage 3 — Predictive Deploy: Phase 1 Done, Phases 2-4 Not Yet Built 
 
-**Status:** Design fully decided this session. Zero code written yet.
-Next actual work: Phase 1 below.
+**Status:** Phase 1 (`risk_scorer.py`) built, verified, and committed
+(`76320fd`). Real inputs confirmed working: CPU%/error rate via
+Prometheus, replica count via `kubectl`, OPA/conftest policy gate via a
+fresh `terraform plan` → `conftest test` each run. A real bug was found
+and fixed during this phase — see `decisions.md` D28 (PromQL
+vector-matching bug in the shared error-rate query, affecting both
+`risk_scorer.py` and `anomaly_detector.py`).
+
+Writes `handoffs/stage3-risk.json` (overwritten each run, same convention
+as `stage4-incident.json`/`stage5-output.json`).
+
+Next actual work: Phase 2 (canary).
 
 ### What's being risk-scored
 **Option A chosen:** Stage 3 risk-scores a deploy of `order-svc` itself
@@ -365,12 +381,12 @@ Stage 2's GCS bucket. So:
   decisions.md entry), not glossed over.
 
 ### Proposed phase breakdown (not yet started)
-- **Phase 1 — Real risk score.** `risk_scorer.py`: pulls the 3 real
+- **Phase 1 — Real risk score. ✅ Done.** `risk_scorer.py`: pulls the 3 real
   inputs above, combines into a risk score + a proceed/block gate
   decision. Writes `handoffs/stage3-risk.json`.
-- **Phase 2 — Real canary.** `VERSION` env var + Prometheus label added
-  to `app.py`; v2 image built; `canary_controller.py` deploys,
-  compares, and promotes/rolls back as described above.
+- **Phase 2 — Real canary.** (not started) `VERSION` env var + Prometheus
+  label added to `app.py`; v2 image built; `canary_controller.py`
+  deploys, compares, and promotes/rolls back as described above.
 - **Phase 3 — Real FinOps.** `cost_estimator.py` calls the real Cloud
   Billing Catalog API for the real GCS bucket's pricing, with the
   order-svc scope limitation documented.
@@ -378,7 +394,8 @@ Stage 2's GCS bucket. So:
   score → gate → (if proceed) canary rollout → cost estimate → writes
   `handoffs/stage3-output.json`, completing the Stage 2→3→4 chain.
 
-**Next immediate action when resuming:** start Phase 1 (`risk_scorer.py`).
+**Next immediate action when resuming:** start Phase 2 (`VERSION` env var
++ `canary_controller.py`).
 
 ---
 
