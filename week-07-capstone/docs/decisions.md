@@ -594,8 +594,6 @@ tickets kept as before/after evidence: `TICKET-f764ae73.json`
 
 ---
 
----
-
 ### D28 — Error-rate PromQL vector-matching bug in shared query (fixed)
 
 **Finding:** Testing Stage 3's `risk_scorer.py` (an instant `/api/v1/query`,
@@ -604,7 +602,8 @@ error-rate value reaching the risk-score gate. In Python, `float("nan") >=
 60` evaluates `False`, so the gate silently defaulted to `"proceed"` on
 genuinely undefined data instead of failing safe.
 
-**Root cause:** the shared error-rate query -- rate(order_svc_requests_total{status="500"}[5m])
+**Root cause:** the shared error-rate query -- 
+rate(order_svc_requests_total{status="500"}[5m])
 / rate(order_svc_requests_total[5m])
 
 -- divides two vectors under Prometheus's default matching, which pairs
@@ -624,7 +623,6 @@ comment assumed "insufficient history," not a vector-matching bug.
 division:
 sum(rate(order_svc_requests_total{status="500"}[5m]))
 / sum(rate(order_svc_requests_total[5m]))
-
 `risk_scorer.py`'s `_query_instant()` additionally got an explicit
 `math.isnan()` guard, treating a NaN result the same as "no data yet"
 (`0.0`) rather than letting it flow uncaught into the gate's numeric
@@ -647,6 +645,56 @@ rewriting them would misrepresent what those runs actually saw. D23's
 anomaly-detection finding (IsolationForest missing a 5-point cluster) is
 judged unaffected, since that finding was CPU-driven and `cpu_pct` was
 never touched by this bug.
+
+---
+
+### D29 — Two canary-testing infrastructure bugs found and fixed (port-forward load-balancing; sequential polling)
+
+**Finding 1 — `kubectl port-forward` to a Service does not load-balance.**
+`load_generator.py`'s traffic goes through `kubectl port-forward -n orders
+svc/order-svc 8080:8080`, relying on the Service to distribute requests.
+`port-forward` to a Service instead pins to a single backing pod for the
+life of the forward -- it does not replicate kube-proxy's real in-cluster
+load-balancing. Result: `canary_controller.py`'s first real test run showed
+v2 reading exactly `cpu_pct_avg=0.0, error_rate_avg=0.0` across all
+samples -- not "healthier," but genuinely zero traffic, since every
+`load_generator.py` request landed on the v1 pod alone.
+
+**Fix:** for canary comparisons specifically, traffic must originate
+inside the cluster so the Service's real selector-based load-balancing
+applies. Used a throwaway in-cluster pod instead of the local port-forward:
+```
+kubectl run canary-load --image=curlimages/curl --rm -it --restart=Never -n orders -- \
+  sh -c 'for i in $(seq 1 200); do curl -s -X POST http://order-svc:8080/order > /dev/null; done'
+```
+
+`load_generator.py` via port-forward remains correct and unaffected for
+`risk_scorer.py`/`anomaly_detector.py`, which only ever read v1's single
+aggregate state and were never comparing two pods against each other.
+
+**Finding 2 — `canary_controller.py` polled v1 and v2 sequentially, not
+concurrently.** The original `main()` called `poll_and_average("v1", ...)`
+to completion (a full ~60s loop), then only afterward started
+`poll_and_average("v2", ...)`. This meant v1's window and v2's window were
+two different ~60s stretches of real time, roughly two minutes apart --
+not a fair same-conditions comparison. This surfaced directly: an
+in-cluster load run happened to land during v2's polling phase (after v1's
+had already finished with no traffic), producing `v1: 0.0/0.0` vs
+`v2: 10.26/0.0` -- a result that looked like a real regression but was
+actually an artifact of comparing two different moments in time.
+
+**Fix:** replaced the two sequential `poll_and_average()` calls with a
+single `poll_both_and_average()` that samples both versions together at
+each timestamp within one shared window.
+
+**Verified:** re-ran `canary_controller.py --dry-run` with the fix and
+in-cluster traffic overlapping the single shared window -- v1
+`cpu_pct_avg=18.79`, v2 `cpu_pct_avg=12.49`, both `error_rate_avg=0.0`.
+Both versions show distinct, plausible, simultaneously-measured values
+(v2 roughly proportional to its ~50% reduction in hashing work), rather
+than one side reading a stale zero. Decision: `promote` (v2 has lower CPU,
+no error-rate regression) -- not yet executed for real; still running
+under `--dry-run`.
 
 ---
 
