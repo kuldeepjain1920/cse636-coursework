@@ -14,11 +14,13 @@ real bugs found and fixed during this work -- see `decisions.md` D28
 (PromQL vector-matching bug) and D29 (canary-testing infrastructure: port-
 forward load-balancing, sequential polling). A third finding, D30 (the
 real `default`->`orders` namespace migration history), was added while
-correcting `architecture.md`/`RUNBOOK.md` for accuracy. **Decision made:
+correcting `architecture.md`/`RUNBOOK.md` for accuracy.
+**Decision made:
 submitting as-is at the current build level** -- Stage 3 Phases 3-4, full
 5-stage wiring, and Options B/A are explicitly deferred, not silently
-missing. **Next major work item: Documents 6/7 (capstone report, demo
-script) -- not started.**
+missing. Documents 6/7 (capstone report, demo script) are now written.
+**Next major work item: open the PR from `capstone-option-c` to `main`.
+Later may complete the pending items and will send an email**
 
 ---
 
@@ -228,8 +230,8 @@ cse636-coursework/                          [repo root, branch: capstone-option-
 | `docs/RUNBOOK.md` (doc 4) | ✅ **Fully updated** with new §6 (Stage 3 commands), renumbered §7 — pending local replace + commit | `12026e9` (original) |
 | Per-stage READMEs — `observability/`, `remediation/` (doc 5) | ✅ Done for Steps 1-4 era; `observability/README.md` could use a Phase 1-6 addendum (not blocking) | `1e19da2` |
 | `k8s/monitoring/README.md` | ✅ Done | `92adf5b` |
-| Capstone report (doc 6, 4-6pp) | ⬜ **Not started** — resume now, against current build scope (§10) | — |
-| 15-min demo script (doc 7) | ⬜ **Not started** — resume now, against current build scope (§10) | — |
+| Capstone report (doc 6, 4-6pp) | ✅ **Done** — `docs/capstone-report.md`, covers Stages 2/4/5 and Stage 3 Phases 1-2, explicit scope statement on what's deferred | - |
+| 15-min demo script (doc 7) | ✅ **Done** — `docs/demo-script.md`, timed walkthrough with fallback plan | - |
 
 **Rough overall completion: directionally higher than the ~30-35%
 estimated earlier.** Stage 4's entire production-shaping arc (Phases 1-6)
@@ -609,10 +611,10 @@ executed promote, Phases 3-4 and Options B/A explicitly deferred).
   Phases 3-4, full 5-stage wiring, and Options B/A are explicitly
   deferred, not silently missing — Documents 6/7 (below) must state this
   scope honestly rather than waiting for those to exist.
-- **Documents 6 and 7 (capstone report, demo script):** not yet started.
-  Given the submission-scope decision above, these should now be written
-  against the current build (not deferred further waiting on Stage 3
-  Phases 3-4/Option B, which was the original gating condition).
+- **Documents 6 and 7 (capstone report, demo script):** done —
+  `docs/capstone-report.md` and `docs/demo-script.md`, both written
+  against the current build scope with an explicit statement of what's
+  deferred (Stage 3 Phases 3-4, full wiring, Options B/A).
 - **`docs/architecture.md`:** updated with a new §6 (Stage 3 Phases 1-2),
   renumbered rubric table (§7) and open-items (§8) — pending local
   replace + commit.
@@ -647,8 +649,8 @@ executed promote, Phases 3-4 and Options B/A explicitly deferred).
    git commit -m "Update architecture.md, RUNBOOK.md for Stage 3 Phases 1-2; add D30 (namespace migration)"
    git push origin capstone-option-c
    ```
-4. Move on to **Documents 6 and 7** (capstone report, demo script) — per
-   the submission-scope decision (§10), Stage 3 Phases 3-4 are
+4. Documents 6 and 7 are done. Remaining open item: open the PR from
+   `capstone-option-c` to `main` (§10), Stage 3 Phases 3-4 are
    deliberately deferred, not the next task. Write both against the
    current, real build: Stages 2/4/5 complete, Stage 3 Phases 1-2
    complete with a real executed canary promote, D22-D30 as honest
