@@ -1,0 +1,15 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app_v2.py app.py
+# ^ copied in as app.py so the container's internal filename and CMD stay
+# identical to v1's Dockerfile -- the only difference is which source file
+# got copied in, not how the container runs.
+
+EXPOSE 8080
+
+CMD ["python3", "app.py"]

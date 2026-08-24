@@ -25,7 +25,7 @@ from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTEN
 _process = psutil.Process()
 _process.cpu_percent()
 
-VERSION = os.environ.get("VERSION", "v1")   # set explicitly per Deployment (see k8s/deployment*.yaml)
+VERSION = os.environ.get("VERSION", "v2")   # set explicitly per Deployment (see k8s/deployment*.yaml)
 
 # Note: cpu_pct can exceed 100% -- Process.cpu_percent() reports the
 # percentage of ONE core's worth of time; concurrent/multi-core work
@@ -68,7 +68,7 @@ _error_count = 0
 _peak_cpu_pct = 0.0
 
 
-def cpu_bound_work(iterations: int = 200_000) -> str:
+def cpu_bound_work(iterations: int = 100_000) -> str:  # v2: half the hashing rounds -- the real, measured difference under canary test
     """Genuine CPU work: repeated hashing. Not a sleep() -- this actually
     competes for real CPU cycles, so concurrent requests genuinely drive
     utilization up under load."""

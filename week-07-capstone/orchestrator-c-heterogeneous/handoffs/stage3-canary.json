@@ -1,0 +1,20 @@
+{
+  "stage": 3,
+  "phase": "canary",
+  "dry_run": false,
+  "timestamp": "2026-08-24T03:54:01.281692+00:00",
+  "window_seconds": 60,
+  "interval_seconds": 10,
+  "v1": {
+    "cpu_pct_avg": 26.24,
+    "error_rate_avg": 0.0,
+    "sample_count": 7
+  },
+  "v2": {
+    "cpu_pct_avg": 7.1,
+    "error_rate_avg": 0.0,
+    "sample_count": 7
+  },
+  "decision": "promote",
+  "reason": "v2 error_rate 0.0 <= v1 0.0 + tolerance, v2 cpu_pct 7.1 <= v1 26.24 + tolerance."
+}

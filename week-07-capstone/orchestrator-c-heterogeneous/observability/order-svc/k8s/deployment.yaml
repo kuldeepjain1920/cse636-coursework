@@ -18,10 +18,13 @@ spec:
     spec:
       containers:
         - name: order-svc
-          image: order-svc:latest
+          image: order-svc:v1
           imagePullPolicy: Never  # image already built locally on the Docker Desktop daemon — never try to pull from a registry
           ports:
             - containerPort: 8080
+          env:
+            - name: VERSION
+              value: "v1"
           # no resource requests/limits set for now — Phase 1 goal is just "runs on K8s";
           # revisit if CPU throttling from limits interferes with the psutil-based measurement (see decisions.md D17)
 ---

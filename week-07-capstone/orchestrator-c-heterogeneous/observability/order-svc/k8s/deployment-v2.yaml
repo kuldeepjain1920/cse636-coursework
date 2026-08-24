@@ -1,0 +1,36 @@
+# k8s/deployment-v2.yaml
+# Canary Deployment (Stage 3 Phase 2). Deliberately reuses app: order-svc
+# in its pod template labels -- the existing Service's selector is
+# `app: order-svc` only (no version pin), so this Deployment's pods
+# automatically get load-balanced alongside v1's, with zero Service edit.
+# `version: v2` is an additional label for kubectl/observability, not
+# something the Service selects on.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-svc-v2
+  namespace: orders
+  labels:
+    app: order-svc
+    version: v2
+spec:
+  replicas: 1  # small replica count, per Stage 3's canary design
+  selector:
+    matchLabels:
+      app: order-svc
+      version: v2
+  template:
+    metadata:
+      labels:
+        app: order-svc
+        version: v2
+    spec:
+      containers:
+        - name: order-svc
+          image: order-svc:v2
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          env:
+            - name: VERSION
+              value: "v2"

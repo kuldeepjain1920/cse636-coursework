@@ -34,7 +34,8 @@ IAC_DIR = os.path.join(SCRIPT_DIR, "..", "iac")
 HANDOFFS_DIR = os.path.join(SCRIPT_DIR, "..", "handoffs")
 
 K8S_NAMESPACE = "orders"
-DEPLOYMENT_NAME = "order-svc"
+# order-svc-v2 is now the live/production deployment -- D29's verified canary promote scaled order-svc to 0 and order-svc-v2 to 1
+DEPLOYMENT_NAME = "order-svc-v2"
 
 # Same PromQL expressions as anomaly_detector.py's fetch_real_metrics(),
 # reused verbatim (not reinvented) so "current risk" and "current anomaly
