@@ -5,24 +5,15 @@ work on this capstone with full context, without needing the original
 (very long) conversation history. Keep this updated at the end of each
 work session.
 
-**Last updated:** after Stage 3 Phase 1 (`risk_scorer.py`) built, tested,
-and committed. A real bug (PromQL vector-matching in the shared
-error-rate query) was found and fixed in both `risk_scorer.py` and
-`anomaly_detector.py` — see `decisions.md` D28. **Next major work item:
-Stage 3 Phase 2 (canary) — not started.**
-
-** One before last updated:** after fully closing out Stage 4's production-shaping
-arc. Phase 6's full chain (`anomaly_detector.py` → `alert_grouper.py` →
-`rca_agent.py` → `write_incident_handoff.py` → `remediation_agent.py`)
-is built, verified end-to-end multiple times against real data, and
-**committed to git (`28c684f`)**. D25, D26, and D27 are inserted into
-`decisions.md`. All three of Phase 6's open design questions are
-resolved (see §6). `docs/architecture.md` and `docs/RUNBOOK.md` have
-both been fully updated to reflect Phases 1-6 as complete — those
-updates are drafted and delivered but **not yet locally replaced or
-committed** (see §10). Documents 6 (capstone report) and 7 (demo script)
-remain deliberately deferred — see §10. **Next major work item: Stage 3
-(predictive deploy) — Phase 1 done (`risk_scorer.py`); Phases 2-4 not started **
+**Last updated:** after Stage 3 Phase 1 (`risk_scorer.py`) and Phase 2
+(`canary_controller.py`) both built, tested, committed, and pushed
+(`092a56e`, `ba3b082`). A real canary promote was executed against the
+live cluster -- `order-svc-v2` is now the production deployment,
+`order-svc` intentionally left at 0 replicas for rollback capability. Two
+real bugs found and fixed during this work -- see `decisions.md` D28
+(PromQL vector-matching bug) and D29 (canary-testing infrastructure: port-
+forward load-balancing, sequential polling). **Next major work item:
+Stage 3 Phase 3 (FinOps cost estimator) -- not started.**
 
 ---
 
@@ -75,6 +66,7 @@ remain deliberately deferred — see §10. **Next major work item: Stage 3
 | Grafana access | K8s Service `grafana` in `monitoring` namespace; reached locally via `kubectl port-forward -n monitoring svc/grafana 3000:80`; login `admin` / auto-generated password (retrieve via `kubectl get secret grafana -n monitoring -o jsonpath="{.data.admin-password}" \| base64 --decode`) |
 | `.gitignore` (root) additions this project | `gcp-sa-key.json`, `tfplan.binary`, `tfplan.json`, `.terraform/`, `venv-*/` |
 | ANTHROPIC_API_KEY | Loaded via `.env` at repo root (`~/cse636-coursework/.env`), found by `load_dotenv()` walking up from cwd |
+| `order-svc` live deployment | `order-svc-v2` (NOT `order-svc`, which is intentionally at 0 replicas post-Phase-2-promote) |
 
 **Known operational quirk:** closing Docker Desktop's dashboard *window*
 does not fully quit it — its Virtualization.framework VM backend keeps
@@ -198,8 +190,8 @@ cse636-coursework/                          [repo root, branch: capstone-option-
 | Stage 4 production-shaping Phase 5 (Grafana dashboard) | ✅ Done — real finding D24 | `92adf5b` |
 | **Stage 4 Phase 6 (chain into Stage 5)** | ✅ **Done — built, verified end-to-end multiple times, all 3 design questions resolved, D25-D27 written and inserted, committed** | `28c684f` |
 | **Stage 4 — entire production-shaping arc (Phases 1-6)** | ✅ **Fully complete and committed** | — |
-| Stage 3 (predictive deploy) | 🔶 Phase 1 done (`risk_scorer.py`); Phases 2-4 not started | `76320fd` |
-| Wiring all 5 stages end-to-end | 🔶 Stages 4→5 chained (Phase 6); Stage 3 Phase 1 built standalone, not yet wired into the chain | — |
+| Stage 3 (predictive deploy) | 🔶 Phases 1-2 done (risk_scorer.py, canary_controller.py); real canary promote executed, order-svc-v2 now live; Phases 3-4 not started | `76320fd`, `092a56e`, `ba3b082` |
+| Wiring all 5 stages end-to-end | 🔶 Stages 4→5 chained (Phase 6); Stage 3 Phases 1-2 built standalone, real promote executed, not yet wired into the full pipeline | — |
 | Option B (GitHub Actions) | ⬜ Not started | — |
 | Option A (single script) | ⬜ Not started | — |
 | `docs/decisions.md` (doc 1) | ✅ D1-D27 all committed | `be01265` (original), updated continuously, D25-D27 via `28c684f` |
@@ -319,20 +311,35 @@ remediation flow was NOT modified by Phase 6).
 
 ---
 
-## 7. Stage 3 — Predictive Deploy: Phase 1 Done, Phases 2-4 Not Yet Built 
+## 7. Stage 3 — Predictive Deploy: Phases 1-2 Done, Phases 3-4 Not Yet Built
 
-**Status:** Phase 1 (`risk_scorer.py`) built, verified, and committed
-(`76320fd`). Real inputs confirmed working: CPU%/error rate via
-Prometheus, replica count via `kubectl`, OPA/conftest policy gate via a
-fresh `terraform plan` → `conftest test` each run. A real bug was found
-and fixed during this phase — see `decisions.md` D28 (PromQL
-vector-matching bug in the shared error-rate query, affecting both
-`risk_scorer.py` and `anomaly_detector.py`).
+**Status:** Phase 1 (`risk_scorer.py`) and Phase 2 (`canary_controller.py`)
+built, verified, and committed (`76320fd`, `092a56e`, `ba3b082`). A real canary
+promote was executed (not simulated) -- v2 (half the hashing work of v1,
+a genuine perf change) was compared against v1 over a live, concurrent
+Prometheus-sampled window, decided `promote` on real CPU/error-rate data,
+and the decision was actually carried out: `order-svc` scaled to 0
+replicas, `order-svc-v2` scaled to 1 and now serving all traffic.
+
+**`order-svc-v2` is the ongoing production deployment going forward** --
+`order-svc` (the original) is intentionally left at 0 replicas rather than
+deleted, preserving rollback capability, but is not the live service.
+`risk_scorer.py`'s `DEPLOYMENT_NAME` was updated from `"order-svc"` to
+`"order-svc-v2"` to reflect this -- **important**: don't assume
+`order-svc` at 0 replicas means something is broken when resuming a
+session; this is the correct post-promote state.
+
+Two real bugs were found and fixed during Phase 1-2 testing -- see
+`decisions.md` D28 (PromQL vector-matching bug in the shared error-rate
+query, affecting both `risk_scorer.py` and `anomaly_detector.py`) and D29
+(two canary-testing infrastructure bugs: `kubectl port-forward` to a
+Service doesn't load-balance, and `canary_controller.py` originally
+polled v1/v2 sequentially rather than concurrently -- both fixed).
 
 Writes `handoffs/stage3-risk.json` (overwritten each run, same convention
 as `stage4-incident.json`/`stage5-output.json`).
 
-Next actual work: Phase 2 (canary).
+Next actual work: Phase 3 (FinOps cost estimator).
 
 ### What's being risk-scored
 **Option A chosen:** Stage 3 risk-scores a deploy of `order-svc` itself
@@ -384,18 +391,22 @@ Stage 2's GCS bucket. So:
 - **Phase 1 — Real risk score. ✅ Done.** `risk_scorer.py`: pulls the 3 real
   inputs above, combines into a risk score + a proceed/block gate
   decision. Writes `handoffs/stage3-risk.json`.
-- **Phase 2 — Real canary.** (not started) `VERSION` env var + Prometheus
-  label added to `app.py`; v2 image built; `canary_controller.py`
-  deploys, compares, and promotes/rolls back as described above.
-- **Phase 3 — Real FinOps.** `cost_estimator.py` calls the real Cloud
-  Billing Catalog API for the real GCS bucket's pricing, with the
-  order-svc scope limitation documented.
+- **Phase 2 — Real canary. ✅ Done.** `VERSION` env var + Prometheus label
+  added to `app.py`/`app_v2.py`; separate v1/v2 images built
+  (`order-svc:v1`, `order-svc:v2`); `canary_controller.py` deploys,
+  compares v1/v2 concurrently over a shared window, and promotes/rolls
+  back based on real data. A real promote was executed; `order-svc-v2` is
+  now the live deployment. Writes `handoffs/stage3-canary.json`.
+- **Phase 3 — Real FinOps.** (not started) `cost_estimator.py` calls the
+  real Cloud Billing Catalog API for the real GCS bucket's pricing, with
+  the order-svc scope limitation documented.
 - **Phase 4 — Wire it together.** An orchestrator script running risk
   score → gate → (if proceed) canary rollout → cost estimate → writes
   `handoffs/stage3-output.json`, completing the Stage 2→3→4 chain.
 
-**Next immediate action when resuming:** start Phase 2 (`VERSION` env var
-+ `canary_controller.py`).
+**Next immediate action when resuming:** start Phase 3
+(`cost_estimator.py` -- real Cloud Billing Catalog API call for Stage 2's
+GCS bucket pricing).
 
 ---
 
