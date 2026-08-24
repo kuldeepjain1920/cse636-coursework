@@ -1,0 +1,24 @@
+{
+  "stage": 3,
+  "phase": "risk_score",
+  "timestamp": "2026-08-23T23:34:50.979076+00:00",
+  "target": "order-svc",
+  "inputs": {
+    "cpu_pct": 0.0,
+    "error_rate": 0.3158,
+    "current_replicas": 1,
+    "policy_check": {
+      "passed": true,
+      "failure_count": 0,
+      "failure_messages": []
+    }
+  },
+  "risk_score": 12.6,
+  "risk_breakdown": {
+    "cpu_risk_contribution": 0.0,
+    "error_risk_contribution": 12.6,
+    "policy_risk_contribution": 0.0
+  },
+  "gate_decision": "proceed",
+  "gate_reason": "Risk score 12.6 below 60 threshold; policy check passed."
+}

@@ -51,8 +51,8 @@ def fetch_real_metrics(minutes: int = 30) -> pd.DataFrame:
 
     cpu = _query_range("order_svc_cpu_percent", start, end)
     error_rate = _query_range(
-        'rate(order_svc_requests_total{status="500"}[5m]) '
-        '/ rate(order_svc_requests_total[5m])',
+        'sum(rate(order_svc_requests_total{status="500"}[5m])) '
+        '/ sum(rate(order_svc_requests_total[5m]))',
         start, end,
     )
     latency_p99 = _query_range(

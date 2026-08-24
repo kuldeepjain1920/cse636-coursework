@@ -594,9 +594,67 @@ tickets kept as before/after evidence: `TICKET-f764ae73.json`
 
 ---
 
+---
+
+### D28 — Error-rate PromQL vector-matching bug in shared query (fixed)
+
+**Finding:** Testing Stage 3's `risk_scorer.py` (an instant `/api/v1/query`,
+unlike `anomaly_detector.py`'s `_query_range()`) surfaced a literal `nan`
+error-rate value reaching the risk-score gate. In Python, `float("nan") >=
+60` evaluates `False`, so the gate silently defaulted to `"proceed"` on
+genuinely undefined data instead of failing safe.
+
+**Root cause:** the shared error-rate query -- rate(order_svc_requests_total{status="500"}[5m])
+/ rate(order_svc_requests_total[5m])
+
+-- divides two vectors under Prometheus's default matching, which pairs
+series only on identical label sets. The numerator carries a single series
+labeled `status="500"`. The denominator has two series (`status="200"`,
+`status="500"`), but matching only pairs the identical `status="500"`
+series -- the `status="200"` series is silently dropped, never included
+in the division at all. The result was never the real error ratio: it
+evaluated to exactly `1.0` whenever any 500s existed in the window, or
+`0/0 = NaN` otherwise. `anomaly_detector.py`'s existing `.fillna(0.0)` was
+masking the NaN case without anyone diagnosing why it occurred -- its
+comment assumed "insufficient history," not a vector-matching bug.
+
+**Fix:** wrap both sides in `sum()` before dividing, in both
+`anomaly_detector.py` (`fetch_real_metrics()`) and `risk_scorer.py`
+(`ERROR_RATE_QUERY`), reducing each side to a label-less scalar before
+division:
+sum(rate(order_svc_requests_total{status="500"}[5m]))
+/ sum(rate(order_svc_requests_total[5m]))
+
+`risk_scorer.py`'s `_query_instant()` additionally got an explicit
+`math.isnan()` guard, treating a NaN result the same as "no data yet"
+(`0.0`) rather than letting it flow uncaught into the gate's numeric
+comparison.
+
+**Verified:** re-ran `anomaly_detector.py` post-fix -- 4 of 118 real data
+points flagged as anomalies, consistent with `contamination=0.04`
+(0.04 x 118 ~= 4.7), a reasonable sanity check that the fix didn't change
+detector behavior unexpectedly. Re-ran `risk_scorer.py` immediately after
+a fresh `load_generator.py` spike (36 errors / 128 requests) -- got
+`error_rate: 0.3158`, a plausible fraction close to the app's own
+self-reported `0.2812` (small gap expected -- different measurement
+windows between Prometheus's `rate()` and the app's running counter),
+rather than the broken `1.0` or masked `0.0` the pre-fix query produced.
+
+Already-committed Phase 6 artifacts (`TICKET-f764ae73.json`,
+`TICKET-34cd34f0.json`, `28c684f`'s RCA reports) are left unmodified --
+they're a historical record of runs made against the pre-fix query, and
+rewriting them would misrepresent what those runs actually saw. D23's
+anomaly-detection finding (IsolationForest missing a 5-point cluster) is
+judged unaffected, since that finding was CPU-driven and `cpu_pct` was
+never touched by this bug.
+
+---
+
 ## Open items (not yet decided)
 
 - **PR from `capstone-option-c` to `main`:** not yet opened. Original
   question was whether to open it now (IaC-only) or after more of Option
   C's build-out lands on the branch. Still unresolved as of Stage 4
   Step 4's completion.
+
+
