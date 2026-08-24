@@ -16,10 +16,10 @@ high-level design, see `docs/architecture.md`.
 | Tool | Why it's needed |
 |---|---|
 | `gcloud` CLI, authenticated | Stage 2 (IaC) provisions real GCP resources |
-| `terraform` | Stage 2 — infrastructure as code |
-| `conftest` | Stage 2 — OPA policy enforcement against Terraform plans |
+| `terraform` | Stage 2 — infrastructure as code; also re-run live by Stage 3's `risk_scorer.py` |
+| `conftest` | Stage 2 — OPA policy enforcement against Terraform plans; also re-run live by Stage 3's `risk_scorer.py` |
 | `slsa-verifier` | Stage 2 — verifies (and correctly rejects) the SLSA provenance document |
-| Docker Desktop, with local Kubernetes enabled | Stage 4 — containerizing and deploying `order-svc`, running Prometheus/Grafana |
+| Docker Desktop, with local Kubernetes enabled | Stage 4 — containerizing and deploying `order-svc`, running Prometheus/Grafana; Stage 3 — canary v1/v2 images and Deployments |
 | `helm` | Stage 4 production-shaping — installs Prometheus and Grafana |
 | Python 3.12+ | All stages |
 | `pip` | Installing per-stage dependencies |
@@ -352,9 +352,20 @@ kubectl get pods -n monitoring
 ```
 
 Confirm `order-svc` is `1/1 Running`, and Prometheus's 5 components plus
-Grafana are all `Running`.
+Grafana are all `Running`. **As of Stage 3 Phase 2 (§6), this changes —
+see §6's note on current live state before assuming something is
+broken.**
 
 ### 5.1 Phase 1 — Deploy `order-svc` to Kubernetes
+
+**Note on this section's real history:** per the original Week 7 lab
+instructions, `order-svc` was first deployed into the `default`
+namespace. It was then deliberately moved into `orders` for realism —
+since namespace is immutable on an existing K8s object, this meant
+deleting and recreating the Deployment/Service, not an in-place edit
+(see `decisions.md` D30). The commands below reproduce the **current,
+final state** directly into `orders` — a fresh clone doesn't need to
+re-enact the `default`-first detour.
 
 ```bash
 cd ~/cse636-coursework/week-07-capstone/orchestrator-c-heterogeneous/observability/order-svc/k8s
@@ -362,10 +373,10 @@ kubectl create namespace orders
 kubectl apply -f deployment.yaml
 ```
 
-Deploys `order-svc` as a K8s Deployment + ClusterIP Service, in its own
-`orders` namespace (not `default`) for realism. `imagePullPolicy: Never`
-is required — the image is only built locally, never pushed to a
-registry — which means any rebuild needs an explicit
+Deploys `order-svc` as a K8s Deployment + ClusterIP Service, directly
+into its own `orders` namespace. `imagePullPolicy: Never` is required —
+the image is only built locally, never pushed to a registry — which
+means any rebuild needs an explicit
 `kubectl rollout restart deployment/order-svc` to actually be picked up
 (the tag never changes, so K8s won't notice a new image on its own).
 
@@ -396,6 +407,10 @@ Expect real Prometheus text-exposition format output — `order_svc_cpu_percent`
 (Gauge), `order_svc_requests_total{status}` (Counter), and
 `order_svc_request_duration_seconds` (Histogram), alongside
 Python/process default metrics `prometheus_client` adds automatically.
+
+**Note:** as of Stage 3 (§6), these three metrics carry an additional
+`version` label (`v1`/`v2`), and `order-svc:latest` has been superseded
+by separately tagged `order-svc:v1`/`order-svc:v2` images — see §6.1.
 
 ### 5.3 Phase 3 — Install Prometheus, wire the scrape target
 
@@ -442,7 +457,8 @@ pip install -r requirements.txt
 
 `requirements.txt` here includes `requests`, `pandas`, `scikit-learn`
 (for detection), plus `anthropic`/`python-dotenv` (added in Phase 6, for
-`rca_agent.py`) — this single venv now covers the entire Phase 4-6 chain.
+`rca_agent.py`) — this single venv now covers the entire Phase 4-6 chain,
+and (§6) Stage 3 Phases 1-2 as well.
 
 **Requires the Prometheus port-forward from §5.3 to still be running.**
 
@@ -453,6 +469,12 @@ python3 anomaly_detector.py
 Queries Prometheus's `query_range` API via PromQL, feeds real data into
 the unchanged `fit_detector()` (IsolationForest) logic from Week 5.
 Prints how many anomalies were flagged out of how many points fetched.
+
+**Note:** the error-rate PromQL expression here was fixed under D28 (see
+§6.4) — a real vector-matching bug meant the original query never
+computed a correct error ratio. If you're comparing against an older run
+predating that fix, error-rate-derived behavior is not directly
+comparable.
 
 **To see a real, correlated incident rather than idle noise, generate
 load first:**
@@ -576,7 +598,140 @@ exactly this misplacement; it's since been fixed
 
 ---
 
-## 6. Common verification patterns used throughout this build
+## 6. Stage 3 — Predictive Deploy (Phases 1-2)
+
+**Important — current live state:** as of the real canary promote
+executed during Phase 2 testing, **`order-svc-v2` is the live production
+Deployment**, not `order-svc`. `order-svc` (v1) is intentionally left at
+0 replicas (not deleted) to preserve rollback capability. If you're
+resuming a session and `kubectl get deployments -n orders` shows
+`order-svc` at `0/0`, **that is the correct, expected post-promote
+state — not something broken.**
+
+```bash
+kubectl get deployments -n orders
+```
+
+Expect `order-svc` at `0/0/0/0` and `order-svc-v2` at `1/1/1/1`.
+
+### 6.1 Build the v1 and v2 images
+
+```bash
+cd ~/cse636-coursework/week-07-capstone/orchestrator-c-heterogeneous/observability/order-svc
+docker build -t order-svc:v1 .
+docker build -t order-svc:v2 -f Dockerfile.v2 .
+docker images | grep order-svc
+```
+
+`app.py` (v1) and `app_v2.py` (v2, copied in as `app.py` inside the v2
+image by `Dockerfile.v2`) differ by exactly one line: v2's
+`cpu_bound_work()` does `100_000` hashing iterations instead of v1's
+`200_000` — a real, honest performance difference, not a cosmetic
+change. Both files also read a `VERSION` env var and label all three
+Prometheus metrics (`order_svc_cpu_percent`, `order_svc_requests_total`,
+`order_svc_request_duration_seconds`) with it, so `canary_controller.py`
+can query each version's series independently.
+
+### 6.2 Deploy both versions
+
+```bash
+cd k8s
+kubectl apply -f deployment.yaml       # v1, image order-svc:v1
+kubectl apply -f deployment-v2.yaml    # v2, image order-svc:v2
+kubectl get pods -n orders -l app=order-svc --show-labels
+```
+
+Both Deployments share the existing Service's selector (`app: order-svc`,
+no version pin) — no Service edit needed. `deployment-v2.yaml` defines
+only a Deployment, deliberately no Service, since a second Service with
+the same name would conflict, and the whole point of the design is that
+both versions share the one existing Service.
+
+### 6.3 Run the real risk scorer (Phase 1)
+
+```bash
+cd ~/cse636-coursework/week-07-capstone/orchestrator-c-heterogeneous/predictive-deploy
+source ../observability/venv-anomaly-detector/bin/activate
+python3 risk_scorer.py
+```
+
+Pulls 3 real inputs — current CPU%/error rate (Prometheus instant
+query), current OPA/conftest policy result (re-runs a **fresh**
+`terraform plan` → `terraform show` → `conftest test` each time, not
+cached), and current replica count (`kubectl get deployment`) — combines
+them into a risk score and a `proceed`/`block` gate decision, and writes
+`handoffs/stage3-risk.json`. **Requires the Prometheus port-forward from
+§5.3.**
+
+**Note:** `DEPLOYMENT_NAME` in `risk_scorer.py` points at
+`order-svc-v2`, not `order-svc` — updated post-promote to reflect which
+Deployment is actually live (see the note at the top of this section).
+
+### 6.4 Run the real canary comparison (Phase 2)
+
+Requires real traffic reaching **both** v1 and v2 pods during the poll
+window. `load_generator.py` through `kubectl port-forward` will **not**
+work for this specific comparison — port-forward to a Service pins to a
+single backing pod rather than load-balancing, so traffic never reaches
+the second pod (a real bug found and fixed as D29). Instead, generate
+traffic from **inside** the cluster:
+
+```bash
+# Terminal A — the canary comparison itself
+cd ~/cse636-coursework/week-07-capstone/orchestrator-c-heterogeneous/predictive-deploy
+source ../observability/venv-anomaly-detector/bin/activate
+python3 canary_controller.py --dry-run
+```
+
+```bash
+# Terminal B — start immediately after Terminal A, keep traffic flowing
+# for the duration of the ~60-70s window (re-run if it finishes early)
+kubectl run canary-load --image=curlimages/curl --rm -it --restart=Never -n orders -- \
+  sh -c 'for i in $(seq 1 200); do curl -s -X POST http://order-svc:8080/order > /dev/null; done'
+```
+
+`canary_controller.py` samples v1 and v2 **together**, at each
+timestamp, within one shared ~60-70s window (a second real bug, also
+D29 — the original version polled them in two separate sequential
+windows, comparing two different slices of real time). Expect distinct,
+nonzero values for both versions in the printed output — identical `0.0`
+on one side means traffic isn't reaching that version. `--dry-run`
+prints the decision and writes `handoffs/stage3-canary.json` without
+actually scaling or deleting anything.
+
+**To execute a real promote/rollback** (drop `--dry-run`):
+
+```bash
+python3 canary_controller.py
+```
+
+If the decision is `promote`, this **actually** runs `kubectl scale` —
+v2 up to v1's current replica count, v1 down to 0. If `rollback`, it
+**actually** runs `kubectl delete deployment order-svc-v2`, leaving v1
+untouched. Verify the real outcome, don't just trust the printed
+decision:
+
+```bash
+kubectl get deployments -n orders
+kubectl get pods -n orders -l app=order-svc --show-labels
+cat ../handoffs/stage3-canary.json
+```
+
+### 6.5 Known, deliberate limitations
+
+- **Phases 3-4 not built.** `cost_estimator.py` (real GCP Billing API for
+  Stage 2's GCS bucket) and the Stage 2→3→4 orchestrator wiring do not
+  exist yet.
+- **Not chained via `subprocess`.** Unlike Stages 4→5, Stage 3's scripts
+  are run manually/standalone — Phase 4 will close this gap.
+- **`canary_controller.py`'s decision tolerances**
+  (`error_tolerance=0.02`, `cpu_tolerance_pct=5.0`) are this script's own
+  heuristic, not a measured/configured value — reasonable starting
+  points, not independently validated.
+
+---
+
+## 7. Common verification patterns used throughout this build
 
 ```bash
 git status --ignored <path>

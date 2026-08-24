@@ -75,7 +75,7 @@ flowchart TD
 | Wk1/Wk2 (conceptual threads) | Documented throughout, no separate build |
 | Stage 1 (CI/CD) | Built in Week 3, reused as-is |
 | Stage 2 (IaC) | ✅ Built this capstone (see §3) |
-| Stage 3 (predictive deploy) | ⬜ Not yet built |
+| Stage 3 (predictive deploy) | 🔶 Phases 1-2 built and verified — real risk score + real canary promote executed (see §6); Phases 3-4 not yet built |
 | Stage 4 (observability) | ✅ Built this capstone, production-shaped (see §5) |
 | Stage 5 (auto-remediation) | ✅ Built this capstone (see §4) |
 
@@ -107,6 +107,9 @@ practice, and to give the capstone report's "lessons learned" section
 real comparative data instead of hypothetical trade-off discussion. Full
 reasoning in `decisions.md` D4.
 
+**Status as of this writing:** Option C is the only orchestration
+approach built. Options B and A remain not started — see §8.
+
 ### Inter-stage handoff design (Option C)
 
 ```mermaid
@@ -123,6 +126,12 @@ polling watcher. Only the Stage 2→3 transition (IaC → Deploy) has an
 explicit human-approval pause; the observability↔remediation loop
 auto-chains, matching the "agentic SRE" autonomy this pipeline
 demonstrates. Full reasoning in `decisions.md` D6.
+
+**Status as of this writing:** Stages 4→5 are chained via `subprocess`
+(Phase 6). Stage 3 (§6) exists and runs correctly, but is not yet
+`subprocess`-chained to Stage 2 (upstream) or Stage 4 (downstream) — it
+is run standalone. Full end-to-end wiring is Stage 3 Phase 4, not yet
+built — see §8.
 
 ---
 
@@ -242,8 +251,13 @@ flowchart TD
 ```
 
 **Phase-by-phase summary:**
-- **Phase 1:** `order-svc` deployed to Docker Desktop's K8s, moved to its
-  own `orders` namespace (not `default`) for realism.
+- **Phase 1:** `order-svc` deployed to Docker Desktop's K8s. Per the
+  original Week 7 lab instructions it was first deployed into the
+  `default` namespace; it was then deliberately moved into its own
+  `orders` namespace for realism. Kubernetes namespace is an immutable
+  field on an existing object, so this required deleting and recreating
+  the Deployment/Service rather than an in-place edit — see
+  `decisions.md` D30.
 - **Phase 2:** `app.py` exposes a real Prometheus-format
   `/metrics/prometheus` endpoint via `prometheus_client` — the original
   custom JSON `/metrics` endpoint is untouched and still used by Stage 5.
@@ -284,7 +298,7 @@ primary data path), `load_generator.py`, `fit_detector()`/
 `decisions.md`:**
 - **D22:** local dev reaches Prometheus/`order-svc` via `kubectl
   port-forward` — explicitly not production-realistic; a genuine, still-open
-  tradeoff (see §7).
+  tradeoff (see §8).
 - **D23:** IsolationForest (contamination=0.04) can miss a sustained
   incident once `rate()`'s 5-minute smoothing duplicates readings across
   several consecutive query points.
@@ -300,36 +314,125 @@ primary data path), `load_generator.py`, `fit_detector()`/
 
 ---
 
-## 6. Rubric mapping
+## 6. Stage 3 — Predictive Deploy (Phases 1-2 done, Phases 3-4 not built)
+
+```mermaid
+flowchart TD
+    Inputs["Real inputs:<br/>Prometheus CPU%/error rate,<br/>OPA/conftest policy result (fresh terraform plan each run),<br/>kubectl replica count"] --> Risk["risk_scorer.py:<br/>risk score + proceed/block gate"]
+    Risk -->|block| Blocked["Deploy blocked<br/>(policy fail = hard block, independent of score)"]
+    Risk -->|proceed| Canary["canary_controller.py:<br/>v1 vs v2, concurrent Prometheus<br/>polling over one shared window"]
+    Canary -->|promote| Promote["kubectl scale:<br/>v2 up to v1's replica count,<br/>v1 down to 0"]
+    Canary -->|rollback| Rollback["kubectl delete:<br/>v2 Deployment, v1 untouched"]
+```
+
+**What's being risk-scored:** `order-svc`'s own K8s deployment (the same
+real, already-running service from Stage 4) — not Stage 2's Terraform
+plan (too low-signal; a small GCS bucket change rarely trips real risk)
+and not a synthetic scenario. This keeps Stage 3 connected to both
+Stage 2 (before) and Stage 4 (after) in the real pipeline.
+
+**Canary design:** a genuinely real canary, not a simulated
+recommendation. `app.py`/`app_v2.py` differ by one real, honest change —
+v2 does half the CPU-bound hashing work of v1 (`100_000` vs `200_000`
+iterations) — a real performance change, not a cosmetic label swap.
+Separate images (`order-svc:v1`, `order-svc:v2`), not a shared image with
+a runtime flag, matching real production practice: an immutable,
+independently-buildable artifact per version, not a shared artifact
+toggled by config.
+
+**FinOps scope (Phase 3, not yet built):** `order-svc` runs on local
+Docker Desktop Kubernetes, which GCP does not actually bill. The only
+real, billed GCP resource in this capstone is Stage 2's GCS bucket — so
+the planned `cost_estimator.py` will call the real Cloud Billing Catalog
+API for that bucket's pricing only, with the `order-svc` scope limitation
+documented plainly rather than inventing a hypothetical cloud runtime
+cost for a service that isn't actually billed.
+
+**Phase-by-phase status:**
+- **Phase 1 — Real risk score. ✅ Done.** `risk_scorer.py` pulls all 3
+  real inputs above and combines them into a risk score + gate decision.
+  A failed OPA/conftest check is a hard block regardless of score. Writes
+  `handoffs/stage3-risk.json`.
+- **Phase 2 — Real canary. ✅ Done.** `canary_controller.py` samples v1
+  and v2 together, at each timestamp, within one shared polling window
+  (not two separate sequential windows — see D29), then promotes or
+  rolls back based on the real comparison. **A real promote was
+  executed** against the live cluster: `order-svc-v2` is now the live,
+  production deployment; `order-svc` (v1) is intentionally left at 0
+  replicas (not deleted) to preserve rollback capability. Writes
+  `handoffs/stage3-canary.json`.
+- **Phase 3 — Real FinOps.** Not started. `cost_estimator.py` will call
+  the real Cloud Billing Catalog API for Stage 2's GCS bucket pricing.
+- **Phase 4 — Wire it together.** Not started. An orchestrator running
+  risk score → gate → (if proceed) canary → cost estimate → writes
+  `handoffs/stage3-output.json`, completing the Stage 2→3→4 chain.
+
+**Three real findings from building Phases 1-2, all documented in
+`decisions.md`:**
+- **D28:** the shared error-rate PromQL query
+  (`rate(...{status="500"}[5m]) / rate(...[5m])`) had a real
+  vector-matching bug — Prometheus's default division matching paired
+  only the identical `status="500"` series, silently dropping the
+  `status="200"` series from the denominator entirely. Result: the query
+  evaluated to exactly `1.0` whenever any errors existed, or `0/0 = NaN`
+  otherwise — never the real ratio. Fixed by wrapping both sides in
+  `sum()` in both `risk_scorer.py` and `anomaly_detector.py`, plus an
+  explicit `math.isnan()` guard in `risk_scorer.py` so a NaN can never
+  again silently default the gate to `"proceed"`.
+- **D29:** two canary-testing infrastructure bugs, found via real test
+  runs. First, `kubectl port-forward` to a Service pins to a single
+  backing pod rather than load-balancing — traffic sent through the local
+  port-forward never reached v2 at all, reading as a false `0.0` rather
+  than a real result. Fixed by generating comparison traffic from inside
+  the cluster instead (a throwaway `kubectl run` pod hitting the Service
+  by name). Second, `canary_controller.py` originally polled v1 and v2 in
+  two separate sequential ~60s windows rather than together — meaning
+  "v1's window" and "v2's window" were two different slices of real time,
+  not a fair same-conditions comparison. Fixed by sampling both versions
+  together at each timestamp within one shared window.
+
+Full detail: `decisions.md` D28-D30, `handoffs/stage3-risk.json`,
+`handoffs/stage3-canary.json`.
+
+---
+
+## 7. Rubric mapping
 
 Maps each capstone rubric line item (from the course's Week 7 doc) to the
 artifact/section that satisfies it.
 
 | Rubric criterion | Points | Satisfied by |
 |---|---|---|
-| End-to-end pipeline integration | 20 | §1 (pipeline diagram) + §2 (handoff design) once all stages are wired; **not yet complete** — Stage 3 and full wiring still pending |
-| Agentic IaC with policy enforcement | 15 | §3 — `orchestrator-c-heterogeneous/iac/`, fully built and verified |
+| End-to-end pipeline integration | 20 | §1 (pipeline diagram) + §2 (handoff design) + §6 (Stage 3). Stages 4→5 fully chained (Phase 6); Stage 3 Phases 1-2 built and real-tested but run standalone, not yet `subprocess`-chained to Stage 2 or Stage 4 (Phase 4, not built). **Partially complete** — full 5-stage wiring not yet achieved. |
+| Agentic IaC with policy enforcement | 15 | §3 — `orchestrator-c-heterogeneous/iac/`, fully built and verified; also reused live by §6's `risk_scorer.py`, which re-runs a fresh `terraform plan` → `conftest test` on every risk-score call |
 | Agent security and guardrails | 15 | §3's two real incidents (unprompted `apply`, injection refusal) + §4's blast-radius chain (4 gates, all outcome paths verified, including the Phase 6-added `resolved_no_action_needed` path) |
-| Observability (service + agent telemetry) | 10 | §5 — service-level spans (Step 3) + Week 5's agent-level `gen_ai.*` spans; production-shaped Prometheus/Grafana pipeline fully built, verified, and committed (Phases 1-6) |
+| Observability (service + agent telemetry) | 10 | §5 — service-level spans (Step 3) + Week 5's agent-level `gen_ai.*` spans; production-shaped Prometheus/Grafana pipeline fully built, verified, and committed (Phases 1-6); also the data source for §6's real risk-scoring and canary comparison |
 | Auto-remediation with blast-radius control | 10 | §4 — fully built and verified |
-| Audit trail and governance | 10 | SLSA provenance (§3) + `handoffs/*.json` files (audit trail per stage) + ITSM tickets (§4) |
+| Audit trail and governance | 10 | SLSA provenance (§3) + `handoffs/*.json` files (audit trail per stage, now including `stage3-risk.json`/`stage3-canary.json`) + ITSM tickets (§4) |
 | Presentation clarity and demo quality | 10 | Demo script — **not yet built** (document 7 in the docs queue) |
-| Technical report quality | 10 | Capstone report — **not yet built** (document 6 in the docs queue), will draw on `decisions.md` for honest lessons-learned material |
+| Technical report quality | 10 | Capstone report — **not yet built** (document 6 in the docs queue), will draw on `decisions.md` for honest lessons-learned material, including D22-D30 |
 
 ---
 
-## 7. What's still open
+## 8. What's still open
 
-- Stage 3 (predictive deploy) — not started.
-- Full 5-stage wiring/chaining end to end — Stages 4→5 now chained
-  (Phase 6); Stage 3 and its connections to Stages 2/4 still not started.
+- Stage 3 Phases 3-4 (FinOps cost estimator, full orchestrator wiring) —
+  not started.
+- Full 5-stage wiring/chaining end to end — Stages 4→5 chained (Phase 6);
+  Stage 3 Phases 1-2 built and real-tested standalone, not yet chained to
+  Stages 2/4 (blocked on Phase 4).
 - Options B and A — not started.
 - PR from `capstone-option-c` to `main` — not yet opened.
 - `execute_scale` (Stage 5) remains simulated (updates in-memory state,
   never calls `kubectl scale`) — deliberately deferred, see `decisions.md`
   D26.
-- The Phase 4-6 chain runs via local `kubectl port-forward`, not as an
-  in-cluster K8s Job — deliberately deferred, see `decisions.md` D22.
+- The Phase 4-6 chain (Stage 4→5) runs via local `kubectl port-forward`,
+  not as an in-cluster K8s Job — deliberately deferred, see `decisions.md`
+  D22. (Note: Stage 3's canary comparison specifically works around this
+  same limitation differently — see D29 — since a canary needs real
+  load-balanced traffic across two pods, which port-forward cannot
+  provide.)
+- Documents 6 (capstone report) and 7 (demo script) — not started.
 
 See `docs/CONTINUATION.md` for the live, detailed status table and the
 next-immediate-task breakdown.

@@ -12,8 +12,13 @@ live cluster -- `order-svc-v2` is now the production deployment,
 `order-svc` intentionally left at 0 replicas for rollback capability. Two
 real bugs found and fixed during this work -- see `decisions.md` D28
 (PromQL vector-matching bug) and D29 (canary-testing infrastructure: port-
-forward load-balancing, sequential polling). **Next major work item:
-Stage 3 Phase 3 (FinOps cost estimator) -- not started.**
+forward load-balancing, sequential polling). A third finding, D30 (the
+real `default`->`orders` namespace migration history), was added while
+correcting `architecture.md`/`RUNBOOK.md` for accuracy. **Decision made:
+submitting as-is at the current build level** -- Stage 3 Phases 3-4, full
+5-stage wiring, and Options B/A are explicitly deferred, not silently
+missing. **Next major work item: Documents 6/7 (capstone report, demo
+script) -- not started.**
 
 ---
 
@@ -42,7 +47,7 @@ Stage 3 Phase 3 (FinOps cost estimator) -- not started.**
 | `capstone-option-c` | The git branch all Option C work lives on |
 | Handoff file | `handoffs/stageN-output.json` — JSON audit-trail file each stage writes before invoking the next stage directly via `subprocess` |
 | Blast-radius controls | The 4-5 automated safety gates in `remediation_agent.py` (kill switch, rate limit, error-budget gate, human approval) |
-| `orders` namespace | K8s namespace holding `order-svc`'s Deployment + Service (moved off `default` during Phase 3 for realism) |
+| `orders` namespace | K8s namespace holding `order-svc`'s Deployment + Service (moved off `default` during Phase 3 for realism — see D30 for the real migration history) |
 | `monitoring` namespace | K8s namespace holding Prometheus (5 components) and Grafana |
 | `resolved_no_action_needed` | The 4th `remediation_agent.py` outcome, added via the D27 fix — represents a dry-run-confirmed, correctly-no-op decision (distinct from `unresolved`, which still means "a scale was likely needed but never executed") |
 
@@ -60,8 +65,8 @@ Stage 3 Phase 3 (FinOps cost estimator) -- not started.**
 | Service account (IaC) | `terraform-iac-demo@cse636-capstone-iac.iam.gserviceaccount.com`, scoped to `roles/storage.admin` only |
 | Key file | `week-07-capstone/orchestrator-c-heterogeneous/iac/gcp-sa-key.json` (gitignored) |
 | K8s cluster | Docker Desktop's built-in Kubernetes (`docker-desktop` context), single-node local cluster |
-| Python venvs in use | `venv-week6` (repo root, `anthropic`+`python-dotenv`, used historically for Stage 5 standalone testing); `venv-order-svc` (inside `order-svc/`, `flask`+`psutil`+`opentelemetry-*`+`prometheus-client`+`requests`); `venv-anomaly-detector` (inside `observability/`, now has `requests`+`pandas`+`scikit-learn`+`anthropic`+`python-dotenv` — used for the ENTIRE Phase 4-6 chain including invoking `remediation_agent.py` via subprocess, since `subprocess.run([sys.executable, ...])` reuses whatever interpreter is currently active) |
-| `order-svc` access | Deployed to K8s (`orders` namespace); reached locally via `kubectl port-forward -n orders svc/order-svc 8080:8080` |
+| Python venvs in use | `venv-week6` (repo root, `anthropic`+`python-dotenv`, used historically for Stage 5 standalone testing); `venv-order-svc` (inside `order-svc/`, `flask`+`psutil`+`opentelemetry-*`+`prometheus-client`+`requests`); `venv-anomaly-detector` (inside `observability/`, now has `requests`+`pandas`+`scikit-learn`+`anthropic`+`python-dotenv` — used for the ENTIRE Phase 4-6 chain including invoking `remediation_agent.py` via subprocess, since `subprocess.run([sys.executable, ...])` reuses whatever interpreter is currently active, AND for Stage 3's `risk_scorer.py`/`canary_controller.py`, which only need `requests`) |
+| `order-svc` access | Deployed to K8s (`orders` namespace); reached locally via `kubectl port-forward -n orders svc/order-svc 8080:8080` (note: this port-forward pins to a single pod, not load-balanced — see D29 for why canary comparisons need in-cluster traffic instead) |
 | Prometheus access | K8s Service `prometheus-server` in `monitoring` namespace; reached locally via `kubectl port-forward -n monitoring svc/prometheus-server 9090:80` |
 | Grafana access | K8s Service `grafana` in `monitoring` namespace; reached locally via `kubectl port-forward -n monitoring svc/grafana 3000:80`; login `admin` / auto-generated password (retrieve via `kubectl get secret grafana -n monitoring -o jsonpath="{.data.admin-password}" \| base64 --decode`) |
 | `.gitignore` (root) additions this project | `gcp-sa-key.json`, `tfplan.binary`, `tfplan.json`, `.terraform/`, `venv-*/` |
@@ -78,14 +83,16 @@ if unsure.
 time work resumes):
 1. `kubectl cluster-info` — confirm Docker Desktop/K8s is up (wait
    ~1-3 min after opening Docker Desktop if it was closed)
-2. `kubectl get pods -n orders` / `-n monitoring` — confirm `order-svc`,
-   Prometheus's 5 components, and Grafana are all `Running`
+2. `kubectl get pods -n orders` / `-n monitoring` — confirm `order-svc-v2`
+   (NOT `order-svc` — see the live-deployment row above), Prometheus's 5
+   components, and Grafana are all `Running`
 3. Start the port-forwards needed for whatever you're doing (Prometheus
-   for anything touching `anomaly_detector.py`/`alert_grouper.py`;
-   `order-svc` for `load_generator.py`; Grafana only if viewing the
-   dashboard)
+   for anything touching `anomaly_detector.py`/`alert_grouper.py`/
+   `risk_scorer.py`; `order-svc` for `load_generator.py`; Grafana only if
+   viewing the dashboard)
 4. Activate the right venv — `venv-anomaly-detector` for anything in
-   `observability/` (covers the whole Phase 4-6 chain now)
+   `observability/` or `predictive-deploy/` (covers Phase 4-6 plus
+   Stage 3 Phases 1-2)
 
 ---
 
@@ -98,16 +105,22 @@ cse636-coursework/                          [repo root, branch: capstone-option-
 ├── week-00 through week-06.../             [complete, closed out, not relevant here]
 └── week-07-capstone/
     ├── docs/
-    │   ├── decisions.md                    [D1 through D27 all committed]
+    │   ├── decisions.md                    [D1 through D30 — D28/D29 committed; D30 (namespace
+    │   │                                     migration) added, commit status: confirm]
     │   ├── CONTINUATION.md                 [this file]
-    │   ├── architecture.md                 [FULLY UPDATED this session — §1 legend, §5 (header +
-    │   │                                     content) rewritten for Phases 1-6 complete, §6 rubric row,
-    │   │                                     §7 open items — drafted/delivered, pending local replace + commit]
-    │   └── RUNBOOK.md                      [FULLY UPDATED this session — §5 (was a placeholder) now has
-    │   │                                     5.1-5.7 covering all of Phases 1-6 plus known limitations,
-    │   │                                     §6 got 2 new verification entries — pending local replace + commit]
+    │   ├── architecture.md                 [FULLY UPDATED — new §6 (Stage 3 Phases 1-2), old §6/§7
+    │   │                                     renumbered to §7/§8, rubric table + open items updated —
+    │   │                                     pending local replace + commit]
+    │   └── RUNBOOK.md                      [FULLY UPDATED — new §6 (Stage 3 Phases 1-2 commands),
+    │   │                                     old §6 renumbered to §7, namespace note added to §5.1 —
+    │   │                                     pending local replace + commit]
     └── orchestrator-c-heterogeneous/
         ├── handoffs/
+        │   ├── stage3-risk.json            [Stage 3 Phase 1; overwritten each risk_scorer.py run,
+        │   │                                 same convention as stage4/stage5]
+        │   ├── stage3-canary.json          [Stage 3 Phase 2; overwritten each canary_controller.py
+        │   │                                 run; current content reflects the REAL executed promote,
+        │   │                                 dry_run: false]
         │   ├── stage4-incident.json        [now overwritten by REAL write_incident_handoff.py output,
         │   │                                 no longer the hand-written fixture]
         │   └── stage5-output.json          [overwritten each Stage 5 run]
@@ -138,6 +151,15 @@ cse636-coursework/                          [repo root, branch: capstone-option-
         │       ├── prometheus-values.yaml  [scrape_interval: 5s, scrape_timeout: 4s — D24]
         │       ├── grafana-values.yaml     [admin password deliberately NOT hardcoded]
         │       └── dashboard-order-svc-incident.json  [exported "order-svc Incident Dashboard"]
+        ├── predictive-deploy/              [Stage 3 Phases 1-2, DONE]
+        │   ├── risk_scorer.py              [Phase 1; real CPU%/error rate (Prometheus instant query),
+        │   │                                 real OPA/conftest result (fresh terraform plan each run),
+        │   │                                 real replica count via kubectl; D28 fix applied
+        │   │                                 (sum()-wrapped error-rate query + NaN guard);
+        │   │                                 DEPLOYMENT_NAME points at order-svc-v2 post-promote]
+        │   └── canary_controller.py        [Phase 2; polls v1/v2 concurrently within one shared
+        │   │                                 window (D29 fix); real promote executed —
+        │   │                                 order-svc-v2 now live, order-svc at 0 replicas]
         └── observability/                  [Stage 4 — Steps 1-4 done, production-shaping Phases 1-6 DONE]
             ├── load_generator.py           [DONE — Step 4; BASE_URL still hardcoded to localhost:8080,
             │                                 relies on the order-svc port-forward being open]
@@ -145,7 +167,8 @@ cse636-coursework/                          [repo root, branch: capstone-option-
             │                                 anthropic, python-dotenv (last two added for rca_agent.py)]
             ├── anomaly_detector.py         [Phase 4; standalone, does NOT import from week-05/;
             │                                 fetch_real_metrics() queries Prometheus via PromQL;
-            │                                 fit_detector()/FEATURE_COLUMNS copied verbatim from Week 5]
+            │                                 fit_detector()/FEATURE_COLUMNS copied verbatim from Week 5;
+            │                                 D28 fix applied to error-rate query]
             ├── alert_grouper.py            [Phase 6; standalone copy of week-05/src/alert_grouper.py's
             │                                 group_alerts() logic, unchanged, does NOT import from week-05/]
             ├── rca_agent.py                [Phase 6; NOT a copy of Week 5's rca_agent.py — makes a
@@ -159,16 +182,21 @@ cse636-coursework/                          [repo root, branch: capstone-option-
             │                                 explicit placeholder constants (D25), then subprocess-chains
             │                                 into remediation_agent.py with cwd="../remediation" (D26)]
             ├── output/                     [rca_report_INC-*.md files, human-readable RCA reports]
-            ├── venv-anomaly-detector/       [gitignored — dedicated venv, covers the whole Phase 4-6 chain]
+            ├── venv-anomaly-detector/       [gitignored — dedicated venv, covers the whole Phase 4-6 chain
+            │                                 plus Stage 3 Phases 1-2]
             ├── README.md                    [Step 4 era; could use a Phase 1-6 addendum — not blocking]
-            └── order-svc/                  [DONE — Steps 1-3, Phases 1-2]
-                ├── app.py                  [UPDATED Phase 2 — added /metrics/prometheus endpoint
-                │                             via prometheus_client; original JSON /metrics untouched]
+            └── order-svc/                  [DONE — Steps 1-3, Phases 1-2; v1/v2 canary added Stage 3]
+                ├── app.py                  [v1; UPDATED Stage 3 — VERSION env var, all 3 Prometheus
+                │                             metrics now labeled by version]
+                ├── app_v2.py                [v2; identical to app.py except cpu_bound_work() does
+                │                             100_000 iterations vs v1's 200_000 — the real canary diff]
                 ├── requirements.txt         [UPDATED — added prometheus-client]
                 ├── k8s/
-                │   └── deployment.yaml     [Phase 1/3; Deployment + Service, namespace: orders,
-                │                             Service carries prometheus.io/* scrape annotations]
-                ├── Dockerfile
+                │   ├── deployment.yaml     [v1; image order-svc:v1, env VERSION=v1]
+                │   └── deployment-v2.yaml  [v2; image order-svc:v2, env VERSION=v2; no Service —
+                │                             shares v1's existing Service selector]
+                ├── Dockerfile               [v1]
+                ├── Dockerfile.v2            [v2; copies app_v2.py in as app.py]
                 ├── .dockerignore
                 └── venv-order-svc/          [gitignored]
 ```
@@ -190,27 +218,28 @@ cse636-coursework/                          [repo root, branch: capstone-option-
 | Stage 4 production-shaping Phase 5 (Grafana dashboard) | ✅ Done — real finding D24 | `92adf5b` |
 | **Stage 4 Phase 6 (chain into Stage 5)** | ✅ **Done — built, verified end-to-end multiple times, all 3 design questions resolved, D25-D27 written and inserted, committed** | `28c684f` |
 | **Stage 4 — entire production-shaping arc (Phases 1-6)** | ✅ **Fully complete and committed** | — |
-| Stage 3 (predictive deploy) | 🔶 Phases 1-2 done (risk_scorer.py, canary_controller.py); real canary promote executed, order-svc-v2 now live; Phases 3-4 not started | `76320fd`, `092a56e`, `ba3b082` |
-| Wiring all 5 stages end-to-end | 🔶 Stages 4→5 chained (Phase 6); Stage 3 Phases 1-2 built standalone, real promote executed, not yet wired into the full pipeline | — |
-| Option B (GitHub Actions) | ⬜ Not started | — |
-| Option A (single script) | ⬜ Not started | — |
-| `docs/decisions.md` (doc 1) | ✅ D1-D27 all committed | `be01265` (original), updated continuously, D25-D27 via `28c684f` |
+| Stage 3 (predictive deploy) | 🔶 Phases 1-2 done (risk_scorer.py, canary_controller.py); real canary promote executed, order-svc-v2 now live; Phases 3-4 not started, deferred per submission-scope decision (§10) | `76320fd`, `092a56e`, `ba3b082` |
+| Wiring all 5 stages end-to-end | 🔶 Stages 4→5 chained (Phase 6); Stage 3 Phases 1-2 built standalone, real promote executed, not yet wired into the full pipeline — deferred per submission-scope decision (§10) | — |
+| Option B (GitHub Actions) | ⬜ Not started, deferred per submission-scope decision (§10) | — |
+| Option A (single script) | ⬜ Not started, deferred per submission-scope decision (§10) | — |
+| `docs/decisions.md` (doc 1) | ✅ D1-D30 — D28/D29 committed; D30 added, commit status: confirm | `be01265` (original), updated continuously, D25-D27 via `28c684f` |
 | `docs/CONTINUATION.md` (doc 2) | ✅ Done, kept updated | `22fdcb4` (original), this revision pending commit |
-| `docs/architecture.md` (doc 3) | ✅ **Fully rewritten this session** for Phases 1-6 complete — pending local replace + commit | `057d023` (original) |
-| `docs/RUNBOOK.md` (doc 4) | ✅ **§5 fully written this session** (was a placeholder) — pending local replace + commit | `12026e9` (original) |
+| `docs/architecture.md` (doc 3) | ✅ **Fully updated** with new §6 (Stage 3), renumbered §7/§8 — pending local replace + commit | `057d023` (original) |
+| `docs/RUNBOOK.md` (doc 4) | ✅ **Fully updated** with new §6 (Stage 3 commands), renumbered §7 — pending local replace + commit | `12026e9` (original) |
 | Per-stage READMEs — `observability/`, `remediation/` (doc 5) | ✅ Done for Steps 1-4 era; `observability/README.md` could use a Phase 1-6 addendum (not blocking) | `1e19da2` |
 | `k8s/monitoring/README.md` | ✅ Done | `92adf5b` |
-| Capstone report (doc 6, 4-6pp) | ⬜ **Deliberately deferred** — see §10 | — |
-| 15-min demo script (doc 7) | ⬜ **Deliberately deferred** — see §10 | — |
+| Capstone report (doc 6, 4-6pp) | ⬜ **Not started** — resume now, against current build scope (§10) | — |
+| 15-min demo script (doc 7) | ⬜ **Not started** — resume now, against current build scope (§10) | — |
 
 **Rough overall completion: directionally higher than the ~30-35%
 estimated earlier.** Stage 4's entire production-shaping arc (Phases 1-6)
-is now fully done, verified, and committed — this was the largest
-remaining chunk of build work before Stage 3. Not re-estimated precisely;
-every phase took longer than planned due to real, unpredictable debugging
-(see `decisions.md`), and Phase 6 was no exception (three real findings:
-D25's schema gap, D26's `cwd` bug, D27's outcome-taxonomy gap — all
-resolved).
+is now fully done, verified, and committed. Stage 3 Phases 1-2 are also
+done, including a real executed canary promote. Not re-estimated
+precisely; every phase took longer than planned due to real,
+unpredictable debugging (see `decisions.md`), and Stage 3 was no
+exception (three real findings: D28's PromQL vector-matching bug, D29's
+two canary-testing infrastructure bugs, D30's namespace-migration
+history — all resolved or documented).
 
 ---
 
@@ -334,12 +363,17 @@ Two real bugs were found and fixed during Phase 1-2 testing -- see
 query, affecting both `risk_scorer.py` and `anomaly_detector.py`) and D29
 (two canary-testing infrastructure bugs: `kubectl port-forward` to a
 Service doesn't load-balance, and `canary_controller.py` originally
-polled v1/v2 sequentially rather than concurrently -- both fixed).
+polled v1/v2 sequentially rather than concurrently -- both fixed). A
+third finding, D30, documents the real `default`->`orders` namespace
+migration history surfaced while correcting `architecture.md`/
+`RUNBOOK.md` for accuracy -- not a Stage 3 bug, but logged alongside
+these since it was found during the same doc-correction pass.
 
 Writes `handoffs/stage3-risk.json` (overwritten each run, same convention
 as `stage4-incident.json`/`stage5-output.json`).
 
-Next actual work: Phase 3 (FinOps cost estimator).
+**Decision: Phases 3-4 are deferred, not resumed.** Submitting as-is at
+this build level -- see §10.
 
 ### What's being risk-scored
 **Option A chosen:** Stage 3 risk-scores a deploy of `order-svc` itself
@@ -361,33 +395,35 @@ input is something the pipeline can already actually measure.
 
 ### Canary decision — Option B chosen (real, not just a recommendation)
 A genuinely real canary requires `order-svc` to have an actual "v2" to
-compare against v1 — otherwise there's nothing to canary test. Plan:
-- Add a `VERSION` env var to `app.py`, exposed as a label on its
-  Prometheus metrics, so v1 and v2 traffic can be told apart.
-- Build a "v2" image (small, honest, real difference — not cosmetic).
+compare against v1 — otherwise there's nothing to canary test. Built:
+- `VERSION` env var added to `app.py`/`app_v2.py`, exposed as a label on
+  all 3 Prometheus metrics, so v1 and v2 traffic can be told apart.
+- Separate `order-svc:v1`/`order-svc:v2` images (not a shared image with
+  a runtime flag) — v2's only real difference is `cpu_bound_work()`
+  doing `100_000` hashing iterations vs. v1's `200_000`, a genuine
+  performance change, not a cosmetic label swap.
 - `canary_controller.py` deploys v2 at a small replica count alongside
   v1 (same Service/label selector — standard manual-canary pattern),
-  polls Prometheus over a window comparing v2's error rate/CPU against
-  v1's baseline, then either promotes (scale v2 up, v1 down) or rolls
-  back (delete v2, keep v1) — a real decision based on real comparative
-  data, not simulated.
+  polls Prometheus over a shared window comparing v2's error rate/CPU
+  against v1's baseline, then either promotes (scale v2 up, v1 down) or
+  rolls back (delete v2, keep v1) — a real decision based on real
+  comparative data, not simulated. **A real promote was executed** — see
+  Status above.
 
-### FinOps cost estimate — real Billing API, with an honest scope limit
+### FinOps cost estimate — real Billing API, with an honest scope limit (not built)
 **Important, deliberate limitation:** `order-svc` runs on local Docker
 Desktop Kubernetes, which GCP does NOT actually bill. The only real,
 actually-provisioned-and-billed GCP resource in this whole capstone is
-Stage 2's GCS bucket. So:
-- `cost_estimator.py` calls the REAL Google Cloud Billing Catalog API
-  for GCS pricing SKUs, and computes a real estimated monthly cost for
+Stage 2's GCS bucket. So, if built:
+- `cost_estimator.py` would call the REAL Google Cloud Billing Catalog API
+  for GCS pricing SKUs, and compute a real estimated monthly cost for
   Stage 2's actual bucket configuration.
-- This estimate deliberately does NOT cover `order-svc` — inventing a
+- This estimate deliberately would NOT cover `order-svc` — inventing a
   hypothetical cloud runtime for it just to produce a number would
   reintroduce the same kind of unlabeled fakery this design is trying to
-  avoid by going real. This scope boundary should be documented plainly
-  wherever the cost estimate is presented (README, output, or a new
-  decisions.md entry), not glossed over.
+  avoid by going real.
 
-### Proposed phase breakdown (not yet started)
+### Phase breakdown
 - **Phase 1 — Real risk score. ✅ Done.** `risk_scorer.py`: pulls the 3 real
   inputs above, combines into a risk score + a proceed/block gate
   decision. Writes `handoffs/stage3-risk.json`.
@@ -397,16 +433,14 @@ Stage 2's GCS bucket. So:
   compares v1/v2 concurrently over a shared window, and promotes/rolls
   back based on real data. A real promote was executed; `order-svc-v2` is
   now the live deployment. Writes `handoffs/stage3-canary.json`.
-- **Phase 3 — Real FinOps.** (not started) `cost_estimator.py` calls the
-  real Cloud Billing Catalog API for the real GCS bucket's pricing, with
-  the order-svc scope limitation documented.
-- **Phase 4 — Wire it together.** An orchestrator script running risk
-  score → gate → (if proceed) canary rollout → cost estimate → writes
-  `handoffs/stage3-output.json`, completing the Stage 2→3→4 chain.
+- **Phase 3 — Real FinOps.** ⬜ **Not started, deferred** — see §10.
+- **Phase 4 — Wire it together.** ⬜ **Not started, deferred** — see §10.
 
-**Next immediate action when resuming:** start Phase 3
-(`cost_estimator.py` -- real Cloud Billing Catalog API call for Stage 2's
-GCS bucket pricing).
+**Next immediate action when resuming:** not Stage 3 Phase 3 — per the
+submission-scope decision (§10), the next actual work is Documents 6/7
+(capstone report, demo script), written honestly against the current
+build (Stages 2/4/5 complete, Stage 3 Phases 1-2 complete with a real
+executed promote, Phases 3-4 and Options B/A explicitly deferred).
 
 ---
 
@@ -429,7 +463,7 @@ GCS bucket pricing).
   independently verify (`cat` the file, re-run the check, query the
   actual state, check raw API responses rather than trusting a UI, `find`
   a file to confirm where it actually landed) before moving on. This
-  caught real bugs multiple times (D22-D27 all came from this habit).
+  caught real bugs multiple times (D22-D30 all came from this habit).
 - **`week-05/` and `week-06-assignment/` are read-only reference material**
   — never edit or import from them directly. Reusable logic gets copied
   into new standalone files under `week-07-capstone/`, with a comment
@@ -461,11 +495,18 @@ GCS bucket pricing).
   be picked up. A ConfigMap change needs the same — `kubectl
   apply`/`helm upgrade` alone does not make a running pod re-read its
   config; an explicit rollout restart is required.
+- **In-cluster traffic vs. local port-forward for multi-pod comparisons:**
+  `kubectl port-forward` to a Service pins to one backing pod, not
+  load-balanced — fine for single-target scripts (`risk_scorer.py`,
+  `anomaly_detector.py`), but wrong for anything comparing two pods
+  (canary testing). Use a throwaway in-cluster `kubectl run` pod instead
+  when real load-balanced traffic is required (D29).
 - **Documentation discipline:** per-stage READMEs written immediately
   after each stage is verified. `docs/decisions.md` updated continuously
   at each real decision point — including genuinely surprising findings
   discovered while testing. Big synthesis documents (the report, the
-  demo script) are deliberately deferred — see §10.
+  demo script) are being written now, against current build scope — see
+  §10.
 
 ---
 
@@ -476,7 +517,8 @@ GCS bucket pricing).
   against it, which correctly failed (no signature, no Rekor entry).
 - The IaC work runs against a single local project via manual Terraform,
   not a real CI/CD-triggered pipeline — that gap is intentionally closed
-  later by Option B (GitHub Actions).
+  later by Option B (GitHub Actions), which is deferred for this
+  submission (§10).
 - Even production-shaped Stage 4 is a single-node local K8s (Docker
   Desktop) simulation, not a real multi-node cluster.
 - `psutil`-based CPU measurement inside containers has real, documented
@@ -502,16 +544,19 @@ GCS bucket pricing).
 - Stage 4's real telemetry can be genuinely measured, but Stage 5's
   `remediation_agent.py` also needs autoscaling-policy inputs
   (`max_replicas`, `target_cpu_pct`, `error_budget_remaining`) that don't
-  correspond to anything configured in the cluster yet, since Stage 3
-  hasn't been built. Phase 6 hardcodes these as clearly-labeled
-  placeholder constants (`decisions.md` D25).
+  correspond to anything configured in the cluster yet, since Stage 3's
+  autoscaling policy layer (Phase 3, deferred) was never built. Phase 6
+  hardcodes these as clearly-labeled placeholder constants
+  (`decisions.md` D25).
 - **`remediation_agent.py`'s `execute_scale` has always been simulated**
   — it updates only its own in-memory `state` dict, never calls `kubectl
   scale`. True since Stage 5's original build (before Phase 6 existed),
   only now visible against real K8s infrastructure for the first time
   (`decisions.md` D26). A "remediated" outcome currently does not change
   the actual Deployment's replica count. Deliberately left this way (see
-  §6 #1).
+  §6 #1). **Contrast:** Stage 3's `canary_controller.py` does the
+  opposite — its `kubectl scale`/`kubectl delete` calls are real, not
+  simulated (see §7 and D29's verification).
 - **`remediation_agent.py`'s outcome taxonomy previously had no
   representation for "the agent correctly determined no action was
   needed."** A real, benign incident (CPU 9.9%, zero errors, zero extra
@@ -521,49 +566,94 @@ GCS bucket pricing).
   `resolved_no_action_needed` outcome is now correctly assigned when a
   dry-run genuinely confirms no scale is warranted, verified against the
   same real scenario.
+- **The shared error-rate PromQL query had a real vector-matching bug**
+  (`decisions.md` D28) — Prometheus's default division matching silently
+  paired only the identical `status="500"` series, dropping
+  `status="200"` from the denominator entirely, so the query never
+  computed a real error ratio. Fixed via `sum()`-wrapping in both
+  `risk_scorer.py` and `anomaly_detector.py`, plus an explicit
+  `math.isnan()` guard so a NaN can never again silently default a gate
+  decision to `"proceed"`.
+- **`kubectl port-forward` to a Service does not load-balance** across
+  backing pods — it pins to one (`decisions.md` D29). This broke the
+  first real canary test (v2 read exactly `0.0` — genuinely zero
+  traffic, not "healthier"), fixed by generating comparison traffic from
+  inside the cluster instead.
+- **A related bug in `canary_controller.py` itself:** the original
+  version polled v1 and v2 in two separate sequential ~60s windows, not
+  concurrently — meaning the two versions were compared against two
+  different slices of real time, not fair same-conditions data
+  (`decisions.md` D29). Fixed by sampling both versions together at each
+  timestamp within one shared window.
+- **`order-svc` was originally deployed into the `default` namespace**
+  (per the original Week 7 lab instructions), then deliberately moved
+  into `orders` for realism — Kubernetes namespace is immutable on an
+  existing object, so this required deleting and recreating the
+  Deployment/Service, not an in-place edit (`decisions.md` D30). Not a
+  bug, but `RUNBOOK.md`/`architecture.md` previously described the
+  `orders` deployment as if it had always been the direct target; both
+  have been corrected.
+- **Stage 3 Phases 3-4, full 5-stage wiring, and Options B/A are
+  deliberately not built for this submission** — a conscious scope
+  decision (§10), not an oversight. The report and demo script must
+  state this plainly.
 
 ---
 
 ## 10. Open items (unresolved)
 
 - **PR from `capstone-option-c` to `main`:** not yet opened.
-- **Documents 6 and 7 (capstone report, demo script): deliberately
-  deferred**, not forgotten. **Resume these once Stage 3, full wiring,
-  and at minimum Option B exist.**
-- **Rubric-mapping table:** completed — lives in `docs/architecture.md` §6,
-  now updated to reflect Phases 1-6 as complete.
-- **`docs/architecture.md`:** fully rewritten this session (§1 legend,
-  §5 header + content, §6 rubric row, §7 open items) — drafted and
-  delivered, but **not yet used to replace the local copy or committed to
-  git.**
-- **`docs/RUNBOOK.md`:** §5 fully written this session (5.1-5.7, covering
-  every Phase 1-6 command plus known limitations), §6 got 2 new
-  verification entries — same status: drafted and delivered, **not yet
-  used to replace the local copy or committed to git.**
+- **Submission scope, decided:** submitting as-is at the current build
+  level — Stage 2, Stage 4 (all 6 phases), Stage 5, and Stage 3 Phases
+  1-2 (including a real executed canary promote) are complete. Stage 3
+  Phases 3-4, full 5-stage wiring, and Options B/A are explicitly
+  deferred, not silently missing — Documents 6/7 (below) must state this
+  scope honestly rather than waiting for those to exist.
+- **Documents 6 and 7 (capstone report, demo script):** not yet started.
+  Given the submission-scope decision above, these should now be written
+  against the current build (not deferred further waiting on Stage 3
+  Phases 3-4/Option B, which was the original gating condition).
+- **`docs/architecture.md`:** updated with a new §6 (Stage 3 Phases 1-2),
+  renumbered rubric table (§7) and open-items (§8) — pending local
+  replace + commit.
+- **`docs/RUNBOOK.md`:** updated with a new §6 (Stage 3 Phases 1-2
+  commands), old §6 renumbered to §7 — pending local replace + commit.
+- **`docs/decisions.md` D30:** namespace migration finding (default ->
+  orders required delete-and-recreate) — added to the file; commit
+  status: confirm.
 - **Grafana dashboard's default time range** is still "Last 5 minutes" —
   worth broadening before any actual demo.
 - **`observability/README.md`** is still Step 4-era and could use a
   Phase 1-6 addendum — not blocking, low priority.
+- **Stage 3 Phases 3-4** (FinOps `cost_estimator.py`, orchestrator
+  wiring `handoffs/stage3-output.json`) — not started; deferred per the
+  submission-scope decision above.
 
 ---
 
 ## 11. How to resume
 
 1. Confirm environment (see §3's "every-session operational sequence").
+   Remember: `order-svc-v2` is the live deployment, `order-svc` at 0
+   replicas is expected, not broken.
 2. Read this document fully before taking any action.
-3. Replace local `docs/architecture.md` and `docs/RUNBOOK.md` with the
-   updated versions (already drafted — see §10), and commit them:
+3. Confirm/replace local `docs/architecture.md`, `docs/RUNBOOK.md`, and
+   `docs/decisions.md` (D30) with their updated versions if not already
+   committed, and commit them:
    ```bash
    cd ~/cse636-coursework/week-07-capstone
    git status --ignored docs/
-   git add docs/architecture.md docs/RUNBOOK.md
-   git commit -m "Update architecture.md and RUNBOOK.md to reflect Stage 4 Phases 1-6 completion"
+   git add docs/architecture.md docs/RUNBOOK.md docs/decisions.md
+   git commit -m "Update architecture.md, RUNBOOK.md for Stage 3 Phases 1-2; add D30 (namespace migration)"
    git push origin capstone-option-c
    ```
-4. Move on to **Stage 3 (predictive deploy)** — design is now fully
-   decided (see the "Stage 3 — Predictive Deploy: Design Decided, Not
-   Yet Built" section above); no code written yet. Start with Phase 1
-   (`risk_scorer.py`).
+4. Move on to **Documents 6 and 7** (capstone report, demo script) — per
+   the submission-scope decision (§10), Stage 3 Phases 3-4 are
+   deliberately deferred, not the next task. Write both against the
+   current, real build: Stages 2/4/5 complete, Stage 3 Phases 1-2
+   complete with a real executed canary promote, D22-D30 as honest
+   lessons-learned material, Phases 3-4/Options B/A stated plainly as
+   out of scope for this submission.
 5. Update §5 (status table) and this document's "Last updated" line at
    the end of the session. If new documents or files get committed,
    update §4 (repo structure) too.

@@ -698,6 +698,33 @@ under `--dry-run`.
 
 ---
 
+### D30 — order-svc's namespace migration (default -> orders) required delete-and-recreate
+
+**Finding:** Per the original Week 7 lab instructions, `order-svc` was
+first deployed into the `default` namespace. It was later deliberately
+moved into its own `orders` namespace for production realism -- but
+`kubectl apply` alone could not perform this: `namespace` is an
+immutable field on an existing Deployment/Service object in Kubernetes.
+Attempting to change it via `kubectl apply` with an edited manifest fails
+outright.
+
+**Resolution:** deleted the `default`-namespace Deployment and Service,
+then applied fresh manifests targeting `orders`. Not a bug -- this is
+expected, standard Kubernetes behavior -- but worth documenting since
+`RUNBOOK.md` and `architecture.md` previously described the `orders`
+deployment as if it had always been the direct target, which understated
+a real operational step (and a real gotcha worth knowing before
+attempting a similar migration on any other object).
+
+**No further fix needed** -- this is inherent Kubernetes behavior, not
+something to work around going forward. Documented here for accuracy in
+the capstone report and to correct `RUNBOOK.md`/`architecture.md`, which
+have been updated accordingly.
+
+---
+
+---
+
 ## Open items (not yet decided)
 
 - **PR from `capstone-option-c` to `main`:** not yet opened. Original
